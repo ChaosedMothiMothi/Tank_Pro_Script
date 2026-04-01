@@ -307,4 +307,28 @@ public class RobotBombController : MonoBehaviour
             if (shell != null) shell.TriggerExplosionReaction();
         }
     }
+    [Tooltip("トリガー(すり抜け判定)のオブジェクトと接触した際の処理")]
+    private void OnTriggerEnter(Collider other)
+    {
+        if (_isExploded) return;
+        GameObject hitObj = other.gameObject;
+
+        // ★追加: 接触したのが戦車だった場合
+        TankStatus hitTank = hitObj.GetComponentInParent<TankStatus>();
+        if (hitTank != null)
+        {
+            // 味方チームでなければ即爆発
+            if (_ownerStatus != null && hitTank.team != _ownerStatus.team)
+            {
+                Explode();
+                return;
+            }
+        }
+
+        // 弾や爆風に触れたら爆発
+        if (hitObj.CompareTag("Shell") || hitObj.CompareTag("Explosion") || hitObj.layer == LayerMask.NameToLayer("Explode"))
+        {
+            Explode();
+        }
+    }
 }

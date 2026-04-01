@@ -10,7 +10,7 @@ public class EnemyData : ScriptableObject
         [InspectorName("びびり")] Coward,
         [InspectorName("積極的")] Aggressive,
         [InspectorName("散歩好き")] Wanderer,
-        [InspectorName("腰巾着")] Sycophant, // 追加
+        [InspectorName("腰巾着")] Sycophant, 
         [InspectorName("リーダーシップ")] Leadership,
     }
 
@@ -61,4 +61,9 @@ public class EnemyData : ScriptableObject
 
     [Tooltip("跳弾予測を考慮するか")]
     public bool considerReflection = true;
+
+    // ★追加: 殺意の高い跳弾誘導（スマートエイム）機能
+    [Header("--- デバッグ・特殊機能 ---")]
+    [Tooltip("【デバッグ用】ONにすると、跳弾でプレイヤーに当たる角度を自動計算し、的確に砲塔を向けて撃つようになります（非常に強力です）")]
+    public bool useSmartRicochet = false;
 }

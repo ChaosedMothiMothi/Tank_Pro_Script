@@ -35,9 +35,16 @@ public class EnemyTankController : MonoBehaviour
     // --- 砲塔・攻撃制御 ---
     private float _turretNoiseTime;
     private Quaternion _independentTurretRotation;
-    private bool _isReloading = false;
-    private bool _isActionRigid = false; // 硬直フラグ
+
+    [Tooltip("硬直状態（攻撃中や地雷設置中など）を判定するフラグ")]
+    private bool _isActionRigid = false;
+    // ★追加: 敵戦車も最大弾数を管理するための変数（プレイヤーと同様）
+    [Tooltip("現在の装填されている弾数")]
+    private int _currentAmmoCount;
     private float _fireCooldownTimer = 0f;
+    // ★追加: スマートエイム用変数
+    private Vector3 _smartAimDir = Vector3.zero;
+    private float _smartAimTimer = 0f;
 
     // --- 腰巾着・リーダーシップ用 ---
     private TankStatus _leaderTarget; // 腰巾着が追従する対象
@@ -60,14 +67,17 @@ public class EnemyTankController : MonoBehaviour
         if (turretTransform != null) _independentTurretRotation = turretTransform.rotation;
         else _independentTurretRotation = transform.rotation;
 
-        // ★追加: NavMeshAgentを取得し、勝手に動かないように設定
+        // NavMeshAgentを取得し、勝手に動かないように設定
         _agent = GetComponent<UnityEngine.AI.NavMeshAgent>();
         if (_agent != null)
         {
-            _agent.updatePosition = false; // 物理挙動と喧嘩しないようにOFF
-            _agent.updateRotation = false; // 物理挙動と喧嘩しないようにOFF
+            _agent.updatePosition = false;
+            _agent.updateRotation = false;
             _agent.updateUpAxis = false;
         }
+
+        // ★修正①: ゲーム開始時に最大弾数をセット（プレイヤーと同じ挙動）
+        _currentAmmoCount = tankStatus.GetTotalMaxAmmo();
 
         // 初期ターゲット設定
         DecideNextMoveTarget();
@@ -75,30 +85,17 @@ public class EnemyTankController : MonoBehaviour
 
     private void Update()
     {
-
-        // ★修正: ゲーム終了時は何もしない
+        // ゲーム終了時は何もしない
         if (tankStatus.IsDead || (GameManager.Instance != null && GameManager.Instance.IsGameFinished()))
         {
             if (_lineRenderer != null) _lineRenderer.enabled = false;
-            if (_agent != null && _agent.enabled) _agent.isStopped = true; // NavMeshも止める
+            if (_agent != null && _agent.enabled) _agent.isStopped = true;
             return;
         }
-
-        if (tankStatus.IsDead || (GameManager.Instance != null && GameManager.Instance.IsGameFinished()))
-        {
-            if (_lineRenderer != null) _lineRenderer.enabled = false;
-            return;
-        }
-
-        if (_fireCooldownTimer > 0) _fireCooldownTimer -= Time.deltaTime;
 
         // 硬直中も思考（ターゲット選定・砲塔制御）は続ける
         ThinkTarget();
-
-        // 性格ごとの移動ロジック更新
         ThinkMoveLogic();
-
-        // 砲塔制御
         HandleTurretAI();
 
         // 地雷設置（硬直中は不可）
@@ -106,6 +103,8 @@ public class EnemyTankController : MonoBehaviour
         {
             ThinkMine();
         }
+
+        if (_fireCooldownTimer > 0) _fireCooldownTimer -= Time.deltaTime;
 
         // デバッグ表示
         if (DebugVisualizer.Instance != null && _lineRenderer != null && firePoint != null)
@@ -232,15 +231,28 @@ public class EnemyTankController : MonoBehaviour
                 case EnemyData.AIType.Coward:
                     if (_currentTarget != null)
                     {
-                        // 常に逃げ続ける
+                        // 敵から逃げる方向
                         Vector3 awayDir = (transform.position - _currentTarget.transform.position).normalized;
-                        Vector3 toCenter = (Vector3.zero - transform.position).normalized;
+                        Vector3 randomWobble = new Vector3(Mathf.Sin(Time.time * 2f), 0, Mathf.Cos(Time.time * 2f)) * 0.5f;
+                        Vector3 runDir = (awayDir + randomWobble).normalized;
 
-                        float distFromCenter = transform.position.magnitude;
-                        float centerBias = Mathf.Clamp01((distFromCenter - 10.0f) / 5.0f);
+                        Vector3 targetPos = transform.position + runDir * 6.0f;
 
-                        Vector3 runDir = Vector3.Slerp(awayDir, toCenter, centerBias).normalized;
-                        finalDestination = transform.position + runDir * 5.0f;
+                        // ★修正: 逃げ先が壁の中や場外にならないよう、NavMesh上の安全な座標に補正する
+                        if (UnityEngine.AI.NavMesh.SamplePosition(targetPos, out UnityEngine.AI.NavMeshHit navHit, 4.0f, UnityEngine.AI.NavMesh.AllAreas))
+                        {
+                            finalDestination = navHit.position;
+                        }
+                        else
+                        {
+                            // 安全な場所が見つからなければ、とりあえず中央寄りに逃げる
+                            Vector3 toCenter = (Vector3.zero - transform.position).normalized;
+                            finalDestination = transform.position + toCenter * 3.0f;
+                        }
+                    }
+                    else
+                    {
+                        finalDestination = _moveTarget;
                     }
                     break;
 
@@ -249,18 +261,29 @@ public class EnemyTankController : MonoBehaviour
                     {
                         var allies = FindObjectsByType<TankStatus>(FindObjectsSortMode.None)
                             .Where(t => t.team == tankStatus.team && t != tankStatus && !t.IsDead)
-                            .OrderBy(t => Vector3.Distance(transform.position, t.transform.position))
                             .ToList();
-                        if (allies.Count > 0) _leaderTarget = allies[0];
+                        if (allies.Count > 0) _leaderTarget = allies[Random.Range(0, allies.Count)];
                     }
 
                     if (_leaderTarget != null)
                     {
-                        // リーダーの後ろで止まらず、常に少し揺らぐように位置調整
-                        // (リーダーが動けばついていくので自然と動くが、止まっている時も少し動かす)
-                        Vector3 basePos = _leaderTarget.transform.position - _leaderTarget.transform.forward * 3.0f;
-                        // 少しランダムにずらす
-                        finalDestination = basePos + new Vector3(Mathf.Sin(Time.time), 0, Mathf.Cos(Time.time)) * 1.0f;
+                        // 味方がいる場合、味方の周囲のランダムな位置をウロウロする
+                        if (Vector3.Distance(transform.position, _moveTarget) < 1.0f || Vector3.Distance(_moveTarget, _leaderTarget.transform.position) > 4.0f)
+                        {
+                            Vector2 randCircle = Random.insideUnitCircle * 3.0f;
+                            Vector3 targetPos = _leaderTarget.transform.position + new Vector3(randCircle.x, 0, randCircle.y);
+
+                            // ★ここでも安全な座標に補正
+                            if (UnityEngine.AI.NavMesh.SamplePosition(targetPos, out UnityEngine.AI.NavMeshHit navHit, 3.0f, UnityEngine.AI.NavMesh.AllAreas))
+                            {
+                                _moveTarget = navHit.position;
+                            }
+                            else
+                            {
+                                _moveTarget = _leaderTarget.transform.position;
+                            }
+                        }
+                        finalDestination = _moveTarget;
                     }
                     else
                     {
@@ -290,6 +313,7 @@ public class EnemyTankController : MonoBehaviour
         }
     }
 
+    [Tooltip("ランダム移動など、次の目的地を決定する")]
     private void DecideNextMoveTarget()
     {
         _moveTimer = 0;
@@ -305,91 +329,26 @@ public class EnemyTankController : MonoBehaviour
                 break;
 
             case EnemyData.AIType.Wanderer:
-                _moveTarget = GetFarRandomPoint(); // 遠くへ移動
+            case EnemyData.AIType.Sycophant: // ★修正: 味方がいない腰巾着はWanderer（散歩好き）と同じ処理にする
+                _moveTarget = GetFarRandomPoint(); // なるべく遠くのランダムポイントへ移動
                 break;
 
-            // 他のタイプは毎フレーム計算するのでターゲット座標の更新は必須ではないが、
-            // スタック回避のためにランダム点を入れておく
             default:
                 _moveTarget = GetRandomStagePoint();
                 break;
         }
     }
 
-    // --- 各性格の移動ロジック ---
-
-    private Vector3 LogicCoward()
-    {
-        if (_currentTarget == null) return (_moveTarget - transform.position).normalized;
-
-        float dist = Vector3.Distance(transform.position, _currentTarget.transform.position);
-
-        // プレイヤーから逃げるベクトル
-        Vector3 runAwayDir = (transform.position - _currentTarget.transform.position).normalized;
-
-        // 角（壁）に追いやられないように、ステージ中央へ向かうベクトルを混ぜる
-        Vector3 toCenter = (Vector3.zero - transform.position).normalized;
-
-        // 壁際なら中央への意識を強くする
-        float distFromCenter = transform.position.magnitude;
-        float centerBias = Mathf.Clamp01((distFromCenter - 10.0f) / 4.0f); // 10m超えたら中央へ戻りたがる
-
-        return Vector3.Slerp(runAwayDir, toCenter, centerBias).normalized;
-    }
-
-    private Vector3 LogicAggressive()
-    {
-        if (_currentTarget == null) return (_moveTarget - transform.position).normalized;
-
-        Vector3 toTarget = (_currentTarget.transform.position - transform.position).normalized;
-        float dist = Vector3.Distance(transform.position, _currentTarget.transform.position);
-
-        // ある程度の距離（5m）まで詰める
-        if (dist > 5.0f) return toTarget;
-
-        // 近すぎたら少し離れる、または周りを回る
-        if (dist < 3.0f) return -toTarget;
-
-        return Vector3.Cross(toTarget, Vector3.up).normalized; // 旋回
-    }
-
-    private Vector3 LogicSycophant()
-    {
-        // 味方を探す
-        if (_leaderTarget == null || _leaderTarget.IsDead)
-        {
-            var allies = FindObjectsByType<TankStatus>(FindObjectsSortMode.None)
-                .Where(t => t.team == tankStatus.team && t != tankStatus && !t.IsDead)
-                .OrderBy(t => Vector3.Distance(transform.position, t.transform.position))
-                .ToList();
-
-            if (allies.Count > 0) _leaderTarget = allies[0];
-            else _leaderTarget = null;
-        }
-
-        // 味方がいない場合は散歩好き（Wanderer）の挙動
-        if (_leaderTarget == null)
-        {
-            return (_moveTarget - transform.position).normalized;
-        }
-
-        // 味方の付近（3m後ろなど）をうろつく
-        Vector3 targetPos = _leaderTarget.transform.position - _leaderTarget.transform.forward * 3.0f;
-        if (Vector3.Distance(transform.position, targetPos) < 1.0f) return Vector3.zero; // 位置についたら停止
-
-        return (targetPos - transform.position).normalized;
-    }
-
-
     // --- 物理移動実行 ---
 
+    [Tooltip("物理的な移動を即座に停止させる")]
     private void StopMovementImmediate()
     {
-        Vector3 vel = _rb.linearVelocity;
-        Vector3 horizontalVel = new Vector3(vel.x, 0, vel.z);
-        _rb.AddForce(-horizontalVel * 10.0f, ForceMode.Acceleration);
+        // ★修正③: プレイヤー同様、Velocityを0にして確実に止める（めり込み・滑り防止）
+        _rb.linearVelocity = new Vector3(0, _rb.linearVelocity.y, 0);
     }
 
+    [Tooltip("AIの思考に基づく物理的な移動処理（滑らかな移動と障害物回避）")]
     private void ExecuteMovement()
     {
         if (_isActionRigid || tankStatus.IsInStun)
@@ -406,45 +365,52 @@ public class EnemyTankController : MonoBehaviour
 
         Vector3 desiredVel = _agent.desiredVelocity;
 
-        // 危険回避（弾など）
+        // 1. 危険回避（弾・地雷など）を最優先で上書き
         Vector3 dangerDir = CalculateDangerAvoidance();
         if (dangerDir != Vector3.zero)
         {
             desiredVel = dangerDir.normalized * tankStatus.GetCurrentMoveSpeed();
         }
 
-        // ★追加: 物理的な壁接触防止（ブレーキ）
-        // 目の前 0.6m 以内に壁がある場合、前進しようとする力を止める
-        if (Physics.Raycast(transform.position + Vector3.up * 0.5f, transform.forward, 0.8f, LayerMask.GetMask("Wall")))
+        // 2. ★修正: 壁やトゲへのめり込みを完全に防ぐ「球体（SphereCast）スライダー」
+        int obstacleMask = LayerMask.GetMask("Wall", "Spike");
+        Vector3 checkDir = desiredVel.magnitude > 0.1f ? desiredVel.normalized : transform.forward;
+
+        // 戦車とほぼ同じ太さ（半径0.5m）の球を進行方向に1.5m飛ばしてチェック
+        if (Physics.SphereCast(transform.position + Vector3.up * 0.5f, 0.5f, checkDir, out RaycastHit hit, 1.5f, obstacleMask))
         {
-            // 壁に向かっているなら速度を殺す
-            // (壁から離れる動きは許可する)
-            if (Vector3.Dot(desiredVel, transform.forward) > 0)
-            {
-                desiredVel = Vector3.zero;
-                _rb.linearVelocity = Vector3.zero; // 完全に停止させる
-            }
+            Vector3 wallNormal = hit.normal;
+            wallNormal.y = 0;
+
+            // 進行方向のベクトルから、壁にめり込む力を完全に消し去る（壁に平行なベクトルにする）
+            Vector3 slideVel = Vector3.ProjectOnPlane(desiredVel, wallNormal);
+
+            // 壁に沿って滑る力 ＋ 壁から少し押し返す力（反発力）を混ぜる
+            desiredVel = (slideVel.normalized * tankStatus.GetCurrentMoveSpeed()) + (wallNormal * 2.0f);
         }
 
-        // --- 移動処理 ---
+        // --- プレイヤー同様の「向いてから移動する」滑らかな移動処理 ---
         if (desiredVel.magnitude > 0.1f)
         {
             Vector3 moveDir = desiredVel.normalized;
 
-            // 回転
             float targetAngle = Mathf.Atan2(moveDir.x, moveDir.z) * Mathf.Rad2Deg;
-            float currentY = transform.eulerAngles.y;
-            float nextAngle = Mathf.MoveTowardsAngle(currentY, targetAngle, tankStatus.GetData().rotationSpeed * Time.fixedDeltaTime);
+            float currentY = _rb.rotation.eulerAngles.y;
+
+            float rotSpeed = tankStatus.GetCurrentRotationSpeed();
+            float nextAngle = Mathf.MoveTowardsAngle(currentY, targetAngle, rotSpeed * Time.fixedDeltaTime);
             _rb.MoveRotation(Quaternion.Euler(0, nextAngle, 0));
 
-            // 前進（壁ブレーキがかかっていない場合のみ）
-            if (desiredVel.magnitude > 0.01f && Mathf.Abs(Mathf.DeltaAngle(currentY, targetAngle)) < 45.0f)
+            if (Mathf.Abs(Mathf.DeltaAngle(nextAngle, targetAngle)) <= 45.0f)
             {
                 float speed = tankStatus.GetCurrentMoveSpeed();
-                Vector3 targetForce = transform.forward * speed;
-                Vector3 diff = targetForce - _rb.linearVelocity;
-                diff.y = 0;
-                _rb.AddForce(diff * 20f, ForceMode.Acceleration);
+                Vector3 vel = transform.forward * speed;
+                _rb.linearVelocity = new Vector3(vel.x, _rb.linearVelocity.y, vel.z);
+            }
+            else
+            {
+                Vector3 vel = transform.forward * (tankStatus.GetCurrentMoveSpeed() * 0.3f);
+                _rb.linearVelocity = new Vector3(vel.x, _rb.linearVelocity.y, vel.z);
             }
         }
         else
@@ -562,11 +528,9 @@ public class EnemyTankController : MonoBehaviour
         _isActionRigid = false;
     }
 
-    // --- 砲塔・射撃ロジック ---
-
+    [Tooltip("砲塔の回転とターゲティングを行うAI処理")]
     private void HandleTurretAI()
     {
-        // ターゲット選定
         ThinkTarget();
 
         if (turretTransform == null) return;
@@ -575,29 +539,47 @@ public class EnemyTankController : MonoBehaviour
         if (_currentTarget != null)
         {
             targetDir = (_currentTarget.transform.position - turretTransform.position).normalized;
+
+            if (enemyData.useSmartRicochet)
+            {
+                _smartAimTimer -= Time.deltaTime;
+                // ★修正: 索敵頻度を0.2秒から「0.1秒」に上げ、より素早くルートを見つける
+                if (_smartAimTimer <= 0f)
+                {
+                    _smartAimDir = FindSmartRicochetDirection();
+                    _smartAimTimer = 0.1f;
+                }
+
+                if (_smartAimDir != Vector3.zero)
+                {
+                    targetDir = _smartAimDir;
+                }
+            }
         }
         else
         {
-            targetDir = transform.forward; // ターゲットがいなければ正面
+            targetDir = transform.forward;
         }
+
         targetDir.y = 0;
 
-        // 射撃可否チェック（壁判定含む）
         bool canShoot = CheckShootTrajectory();
 
-        // 索敵首振り（射線が通っていない時）
         float offsetAngle = 0f;
-        if (!canShoot)
+        if (!canShoot && _smartAimDir == Vector3.zero)
         {
-            _turretNoiseTime += Time.deltaTime * 0.5f;
+            _turretNoiseTime += Time.deltaTime * 0.8f;
             float noise = Mathf.PerlinNoise(_turretNoiseTime, 0f) * 2.0f - 1.0f;
-            offsetAngle = noise * enemyData.turretSearchAngle;
+            // 索敵範囲を広めにとり、周囲を常に警戒しているように見せる
+            offsetAngle = noise * (enemyData.turretSearchAngle + 30f);
         }
 
         if (targetDir != Vector3.zero)
         {
             Quaternion baseRot = Quaternion.LookRotation(targetDir);
             Quaternion finalRot = baseRot * Quaternion.Euler(0, offsetAngle, 0);
+
+            // ロックオン時の減速を廃止し、設定された速度で素早く向くようにしました
             _independentTurretRotation = Quaternion.RotateTowards(_independentTurretRotation, finalRot, enemyData.turretRotationSpeed * Time.deltaTime);
         }
     }
@@ -616,28 +598,28 @@ public class EnemyTankController : MonoBehaviour
         }
     }
 
+    [Tooltip("射撃の試行（射線と弾数、クールタイムの確認）")]
     public void TryFire()
     {
-        if (_isReloading || tankStatus.IsInStun || _isActionRigid || _fireCooldownTimer > 0) return;
+        // ★修正: 弾数チェックに加えて、元々の「敵の攻撃クールタイム(_fireCooldownTimer)」も判定に戻す
+        if (tankStatus.IsInStun || _isActionRigid || _fireCooldownTimer > 0 || _currentAmmoCount <= 0) return;
 
         // 壁埋まりチェック
         int wallLayerMask = LayerMask.GetMask("Wall");
         Vector3 muzzlePos = firePoint.position;
         Vector3 turretCenter = turretTransform != null ? turretTransform.position : transform.position;
 
-        // 1. 発射点が壁の中か
         if (Physics.CheckSphere(muzzlePos, 0.2f, wallLayerMask)) return;
-
-        // 2. 砲塔中心から発射点へのRay（壁貫通防止）
         if (Physics.Linecast(turretCenter, muzzlePos, wallLayerMask)) return;
 
         StartCoroutine(FireRoutine());
     }
 
+    [Tooltip("実際の射撃処理と硬直時間の管理")]
     private IEnumerator FireRoutine()
     {
-        _isReloading = true;
         _isActionRigid = true; // 硬直開始
+        _currentAmmoCount--;   // 撃ったので弾を1つ消費する
 
         if (tankStatus.GetShellPrefab() != null && firePoint != null)
         {
@@ -645,24 +627,36 @@ public class EnemyTankController : MonoBehaviour
             GameObject shellObj = Instantiate(tankStatus.GetShellPrefab(), firePoint.position, firePoint.rotation);
             EffectManager.Instance.ShotSound();
 
-            Collider shellCol = shellObj.GetComponent<Collider>();
-            if (shellCol != null && _myColliders != null)
-            {
-                foreach (var c in _myColliders) if (c != null) Physics.IgnoreCollision(shellCol, c);
-            }
+            // ★修正: ここにあった Physics.IgnoreCollision（すり抜け処理）を完全に削除しました。
+            // これにより、跳弾してきた自分の弾が自分自身に当たって自爆するようになります（プレイヤーと同じ条件）。
 
             ShellController shell = shellObj.GetComponent<ShellController>();
             if (shell != null) shell.Launch(gameObject, 0);
         }
 
+        // 撃ったらプレイヤーと同じルールでリロード処理を開始する
+        StartCoroutine(ReloadAmmoRoutine());
+
         // 硬直待機（ShotDelay）
         yield return new WaitForSeconds(tankStatus.GetData().shotDelay);
 
-        // ★修正: 硬直が明けてから、次の発射までのクールダウンをセットする
+        // 元々の「敵の攻撃クールタイム」をここでセットし、連射を防ぐ
         _fireCooldownTimer = enemyData.fireCooldown;
 
         _isActionRigid = false; // 硬直解除
-        _isReloading = false;
+    }
+
+    [Tooltip("弾を1発ずつ回復する処理（プレイヤーと同じ挙動）")]
+    private IEnumerator ReloadAmmoRoutine()
+    {
+        // ★修正: 敵のfireCooldownではなく、プレイヤーと同じ「弾の回復時間(ammoCooldown)」を参照する
+        yield return new WaitForSeconds(tankStatus.GetData().ammoCooldown);
+
+        int totalMax = tankStatus.GetTotalMaxAmmo();
+        if (_currentAmmoCount < totalMax)
+        {
+            _currentAmmoCount++;
+        }
     }
 
     // --- ユーティリティ・チェック関数 ---
@@ -698,90 +692,40 @@ public class EnemyTankController : MonoBehaviour
         }
     }
 
-    // EnemyTankController.cs 内の CheckShootTrajectory を差し替え
-
+    [Tooltip("現在向いている方向に撃った場合、敵に当たるか（射線が通っているか）を判定する")]
     private bool CheckShootTrajectory()
     {
         if (_currentTarget == null || firePoint == null) return false;
 
         Vector3 startPos = firePoint.position;
         Vector3 dir = firePoint.forward;
-        float dist = 100f;
+        int layerMask = Physics.DefaultRaycastLayers & ~LayerMask.GetMask("Spike") & ~LayerMask.GetMask("Mine") & ~LayerMask.GetMask("Ignore Raycast");
+
+        // ★スマートエイムONで、正解の角度が見つかっている場合
+        if (enemyData.useSmartRicochet && _smartAimDir != Vector3.zero)
+        {
+            // ▼ここで shotAllowAngle が使用されます！
+            // 目標の角度に近ければ（設定された許容角度以内なら）、撃つと判定する
+            float angleDiff = Vector3.Angle(dir, _smartAimDir);
+            if (angleDiff <= enemyData.shotAllowAngle)
+            {
+                // 撃つ瞬間に砲塔を正解の角度へ「カチッ」と強制的に合わせる（エイム補正による必中化）
+                if (turretTransform != null)
+                {
+                    turretTransform.rotation = Quaternion.LookRotation(_smartAimDir);
+                    _independentTurretRotation = turretTransform.rotation;
+                }
+                return true;
+            }
+            return false; // 正解の角度に向くまで無駄撃ちしない
+        }
+
+        // ★スマートエイムOFF時、または直接狙う時
         int maxBounces = (tankStatus.GetShellPrefab()?.GetComponent<ShellController>()?.shellData?.maxBounces ?? 0) + tankStatus.bonusBounces;
         if (!enemyData.considerReflection) maxBounces = 0;
 
-        int layerMask = Physics.DefaultRaycastLayers
-            & ~LayerMask.GetMask("Spike")
-            & ~LayerMask.GetMask("Mine")
-            & ~LayerMask.GetMask("Ignore Raycast");
-
-        // --- 1. 超近距離（自爆防止） ---
-        if (enemyData.isTeamAware)
-        {
-            Collider[] closeHits = Physics.OverlapSphere(startPos, 0.3f, layerMask); // 半径を0.5->1.0に拡大し安全度UP
-            foreach (var hit in closeHits)
-            {
-                if (hit.transform.IsChildOf(transform)) continue;
-                TankStatus closeTank = hit.GetComponentInParent<TankStatus>();
-                if (closeTank != null && closeTank.team == tankStatus.team) return false;
-            }
-        }
-
-        // --- 2. 射線チェック（細いRayで敵を探す） ---
-        RaycastHit[] hits = Physics.SphereCastAll(startPos, 0.3f, dir, dist, layerMask); // 少しだけ太く(0.1->0.15)
-        System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
-
-        foreach (var hit in hits)
-        {
-            if (hit.collider.transform.IsChildOf(transform)) continue;
-
-            // 壁反射
-            if (hit.collider.gameObject.layer == LayerMask.NameToLayer("Wall"))
-            {
-                if (maxBounces > 0)
-                {
-                    Vector3 reflectDir = Vector3.Reflect(dir, hit.normal);
-                    // 反射先チェック（ここは簡易的に細いRayのまま）
-                    if (Physics.SphereCast(hit.point + hit.normal * 0.1f, 0.2f, reflectDir, out RaycastHit hit2, dist, layerMask))
-                    {
-                        TankStatus target2 = hit2.collider.GetComponentInParent<TankStatus>();
-                        if (target2 != null && target2.team != tankStatus.team)
-                        {
-                            // 反射で敵を狙えるが、反射前の経路に味方がいないかチェックが必要
-                            if (enemyData.isTeamAware && IsAllyInPath(startPos, dir, hit.distance)) return false;
-                            return true;
-                        }
-                    }
-                }
-                return false; // 壁で射線切れ
-            }
-
-            // 戦車ヒット
-            TankStatus hitTank = hit.collider.GetComponentInParent<TankStatus>();
-            if (hitTank != null)
-            {
-                if (hitTank.team != tankStatus.team)
-                {
-                    // ★敵発見！ -> ここで最終安全確認
-                    // 「敵までの距離」の間に、もっと太い判定で味方がいないか調べる
-                    if (enemyData.isTeamAware)
-                    {
-                        if (IsAllyInPath(startPos, dir, hit.distance))
-                        {
-                            return false; // 射線上に味方が（太い判定で）被っているので撃たない
-                        }
-                    }
-                    return true; // 射線クリア、発射！
-                }
-                else
-                {
-                    // 味方ヒット（細いRayですら味方に当たった）
-                    if (enemyData.isTeamAware) return false;
-                }
-            }
-        }
-
-        return false;
+        // 直接狙う時も細いRaycastで正確に判定する
+        return SimulateRaycastTrajectory(startPos, dir, maxBounces, layerMask, 0);
     }
 
     // ★追加: 指定した距離までの経路に味方がいないか「太いRay」で確認する
@@ -805,12 +749,6 @@ public class EnemyTankController : MonoBehaviour
             }
         }
         return false;
-    }
-
-    private bool CheckWallInFront()
-    {
-        // 進行方向の壁チェック
-        return Physics.Raycast(transform.position + Vector3.up * 0.5f, transform.forward, 1.5f, LayerMask.GetMask("Wall"));
     }
 
     private Vector3 GetRandomStagePoint()
@@ -870,10 +808,7 @@ public class EnemyTankController : MonoBehaviour
             // --- 地雷回避 ---
             else if (hit.CompareTag("Mine"))
             {
-                // 地雷情報を取得
                 TeamType mineTeam = TeamType.Neutral;
-
-                // ※コンポーネント取得の負荷軽減のため、インターフェース化などが理想だが現状の構造で対応
                 var mineCtrl = hit.GetComponent<MineController>();
                 if (mineCtrl != null) mineTeam = mineCtrl.GetTeam();
                 else
@@ -882,7 +817,7 @@ public class EnemyTankController : MonoBehaviour
                     if (robot != null) mineTeam = robot.GetTeam();
                 }
 
-                // 回避半径の決定
+                // 味方の地雷（自身が置いたもの含む）かどうかの判定
                 bool isAlly = (mineTeam == tankStatus.team);
                 float avoidRadius = isAlly ? enemyData.allyMineAvoidRadius : enemyData.mineAvoidRadius;
 
@@ -890,7 +825,8 @@ public class EnemyTankController : MonoBehaviour
                 if (avoidRadius > 0 && dist < avoidRadius)
                 {
                     float weight = 1.0f - (dist / avoidRadius);
-                    totalAvoidVec += awayDir * weight * 2.0f; // 地雷も強く避ける
+                    // ★修正②: 巻き込まれないように、地雷から離れる力（weightへの掛算）を「5.0f」に強化
+                    totalAvoidVec += awayDir * weight * 5.0f;
                     dangerCount++;
                 }
             }
@@ -950,4 +886,73 @@ public class EnemyTankController : MonoBehaviour
 
     private int CountAllies() => FindObjectsByType<TankStatus>(FindObjectsSortMode.None).Count(t => t.team == tankStatus.team && t != tankStatus && !t.IsDead);
     private int CountAlliesNearby(float radius) => Physics.OverlapSphere(transform.position, radius).Select(c => c.GetComponentInParent<TankStatus>()).Count(t => t != null && t.team == tankStatus.team && t != tankStatus && !t.IsDead);
+
+    // --- 跳弾ルート探索（スマートエイム） ---
+
+
+    [Tooltip("360度全方位をスキャンして、跳弾でプレイヤーに当たる角度を探し出す")]
+    private Vector3 FindSmartRicochetDirection()
+    {
+        if (firePoint == null || _currentTarget == null) return Vector3.zero;
+
+        int maxBounces = (tankStatus.GetShellPrefab()?.GetComponent<ShellController>()?.shellData?.maxBounces ?? 0) + tankStatus.bonusBounces;
+        if (maxBounces <= 0 || !enemyData.considerReflection) return Vector3.zero;
+
+        Vector3 startPos = firePoint.position;
+        int layerMask = Physics.DefaultRaycastLayers & ~LayerMask.GetMask("Spike") & ~LayerMask.GetMask("Mine") & ~LayerMask.GetMask("Ignore Raycast");
+
+        // ★修正: プレイヤーの方角だけでなく「360度全方位」を3度刻みでスキャンする！
+        // 真横や真後ろの壁を使った跳弾も完璧に計算できるようになります。
+        for (int angle = 0; angle < 360; angle += 3)
+        {
+            Vector3 testDir = Quaternion.Euler(0, angle, 0) * Vector3.forward;
+
+            if (SimulateRaycastTrajectory(startPos, testDir, maxBounces, layerMask, 0))
+            {
+                return testDir; // 完璧な角度を発見！
+            }
+        }
+        return Vector3.zero;
+    }
+
+    [Tooltip("仮想的に細い線を飛ばして跳弾をシミュレーションし、敵に当たるか判定する")]
+    private bool SimulateRaycastTrajectory(Vector3 startPos, Vector3 dir, int bouncesLeft, int layerMask, int currentBounce)
+    {
+        if (currentBounce > 5) return false; // 無限ループ防止
+
+        // ★修正: SphereCast(太い線)ではなく、Raycast(極細の線)を使うことで、床への誤衝突や角への引っかかり、自分自身への誤射判定を完全に無くす
+        if (Physics.Raycast(startPos, dir, out RaycastHit hit, 100f, layerMask))
+        {
+            // 壁に当たった場合
+            if (hit.collider.gameObject.layer == LayerMask.NameToLayer("Wall"))
+            {
+                if (bouncesLeft > 0)
+                {
+                    // 反射ベクトルを計算して再帰呼び出し
+                    Vector3 reflectDir = Vector3.Reflect(dir, hit.normal);
+                    reflectDir.y = 0;
+                    // 反射位置を少しだけ壁から浮かせる（0.05f）ことで、壁抜けを防ぐ
+                    return SimulateRaycastTrajectory(hit.point + hit.normal * 0.05f, reflectDir, bouncesLeft - 1, layerMask, currentBounce + 1);
+                }
+                return false;
+            }
+
+            // 戦車に当たった場合
+            TankStatus hitTank = hit.collider.GetComponentInParent<TankStatus>();
+            if (hitTank != null)
+            {
+                if (hitTank.team != tankStatus.team)
+                {
+                    // 敵に当たるなら文句なしで射撃可能！(太い判定での味方誤射チェックは排除しました)
+                    return true;
+                }
+                else
+                {
+                    // 味方に当たる場合は撃たない
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
 }

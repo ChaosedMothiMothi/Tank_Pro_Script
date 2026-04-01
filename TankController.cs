@@ -55,16 +55,19 @@ public class TankController : MonoBehaviour
         }
     }
 
+    [Tooltip("地雷設置ボタンを押した際の処理")]
     public void OnMine(InputAction.CallbackContext context)
     {
         if (!IsGameActive) return;
 
-        if (!context.performed || !IsGameActive || tankStatus.IsInStun) return;
+        // ボタンが押された瞬間かどうか、スタン中ではないかを判定
+        if (!context.performed || tankStatus.IsInStun) return;
 
-        // 設置上限チェック
+        // 設置上限チェック（制限以上の場合は設置できないようにする）
         if (tankStatus.ActiveMineCount >= tankStatus.GetTotalMineLimit()) return;
 
-        StartCoroutine(PlaceSpawnerBoxRoutine());
+        // ★修正: スポーンボックス専用ではなく、共通の地雷設置ルーチンを呼ぶように変更
+        StartCoroutine(PlaceMineRoutine());
     }
 
     private void Update()
@@ -164,30 +167,46 @@ public class TankController : MonoBehaviour
         tankStatus.IsInStun = false;
     }
 
-    // ★修正: 地雷設置時の硬直（Stun）を復元
+    [Tooltip("地雷（またはスポーンボックスなどのアイテム）を設置する一連の処理")]
     private IEnumerator PlaceMineRoutine()
     {
-        // 1. 硬直開始
-        // ★修正: 単にフラグを立てるのではなく、ApplyStunでタイマーを設定する
+        // 1. 硬直開始（設置時の隙を作る）
         float delay = tankStatus.GetData().minePlacementDelay;
         tankStatus.ApplyStun(delay);
 
-        GameObject mineObj = Instantiate(tankStatus.GetMinePrefab(), transform.position, Quaternion.identity);
-        MineController mine = mineObj.GetComponent<MineController>();
-        if (mine != null) { mine.Init(tankStatus, tankStatus.GetMineData()); tankStatus.OnMinePlaced(); }
-        else
+        // ★修正: 設置位置を背後にしてスポーンボックス対応等にも使えるように調整
+        Vector3 spawnPos = transform.position - transform.forward * 1.5f;
+
+        // Prefabを取得して生成
+        GameObject mineObj = Instantiate(tankStatus.GetMinePrefab(), spawnPos, Quaternion.identity);
+
+        // ★修正: 取得したオブジェクトに付いているコンポーネントに応じて初期化を振り分ける（関係性の分離）
+        if (mineObj.TryGetComponent(out MineController mine))
         {
-            RobotBombController robot = mineObj.GetComponent<RobotBombController>();
-            if (robot != null) { robot.Init(tankStatus, tankStatus.GetMineData()); tankStatus.OnMinePlaced(); }
+            // 通常の地雷だった場合
+            mine.Init(tankStatus, tankStatus.GetMineData());
+            tankStatus.OnMinePlaced();
+        }
+        else if (mineObj.TryGetComponent(out RobotBombController robot))
+        {
+            // ロボットボムだった場合
+            robot.Init(tankStatus, tankStatus.GetMineData());
+            tankStatus.OnMinePlaced();
+        }
+        else if (mineObj.TryGetComponent(out TankSpawnerBox spawner))
+        {
+            // タンクスポーンボックスだった場合
+            spawner.Init(tankStatus, tankStatus.team);
+            tankStatus.ActiveMineCount++; // スポーンボックス用のカウント増加
         }
 
-        // 2. 設置硬直時間待機 (minePlacementDelay)
+        // 2. 設置硬直時間待機
         yield return new WaitForSeconds(delay);
 
-        // 3. 硬直��除 (ApplyStunのタイマー切れで自動解除されるが、シーケンスとして明示)
+        // 3. 硬直解除
         tankStatus.IsInStun = false;
 
-        // 4. クールダウン待機 (連打防止)
+        // 4. クールダウン待機（ボタン連打防止）
         yield return new WaitForSeconds(tankStatus.GetData().mineCooldown);
     }
 
@@ -223,31 +242,5 @@ public class TankController : MonoBehaviour
         {
             _currentAmmoCount++;
         }
-    }
-    private IEnumerator PlaceSpawnerBoxRoutine()
-    {
-        // 硬直開始
-        float delay = tankStatus.GetData().minePlacementDelay;
-        tankStatus.ApplyStun(delay);
-
-        // 設置位置（戦車の後ろ側など）
-        Vector3 spawnPos = transform.position - transform.forward * 1.5f;
-        GameObject prefab = tankStatus.GetMinePrefab(); // ここにTankSpawnerBoxのPrefabを指定しておく
-
-        if (prefab != null)
-        {
-            GameObject boxObj = Instantiate(prefab, spawnPos, Quaternion.identity);
-            tankStatus.ActiveMineCount++;
-
-            // 箱の初期化
-            TankSpawnerBox spawner = boxObj.GetComponent<TankSpawnerBox>();
-            if (spawner != null)
-            {
-                spawner.Init(tankStatus, tankStatus.team);
-            }
-        }
-
-        yield return new WaitForSeconds(delay);
-        tankStatus.IsInStun = false;
     }
 }
