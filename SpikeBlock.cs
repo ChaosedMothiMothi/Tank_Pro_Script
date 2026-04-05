@@ -1,5 +1,7 @@
 using UnityEngine;
 
+
+[RequireComponent(typeof(UnityEngine.AI.NavMeshObstacle))]
 public class SpikeBlock : MonoBehaviour
 {
     [Header("Settings")]
@@ -48,4 +50,6 @@ public class SpikeBlock : MonoBehaviour
             Gizmos.DrawCube(Vector3.zero, Vector3.one);
         }
     }
+
+
 }

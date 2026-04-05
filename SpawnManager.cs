@@ -23,7 +23,7 @@ public class SpawnManager : MonoBehaviour
         TankStatus status = tankObj.GetComponent<TankStatus>();
         if (status != null)
         {
-            status.SetTeam(req.team, req.isCaptain);
+            status.SetTeam(req.team, req.isCaptain, req.isBoss);
         }
 
         // 必要ならAIコントローラーの初期化など
@@ -38,5 +38,7 @@ public class SpawnManager : MonoBehaviour
         public Transform spawnPoint;
         public TeamType team;
         public bool isCaptain;
+        public bool isBoss;
+        public int spawnPointIndex; // ★追加
     }
 }

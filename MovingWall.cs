@@ -21,6 +21,12 @@ public class MovingWall : MonoBehaviour
 
     private void FixedUpdate()
     {
+        // ★追加: ゲーム開始前、または終了時には壁の移動を完全に止める
+        if (GameManager.Instance != null && (!GameManager.Instance.IsGameStarted || GameManager.Instance.IsGameFinished()))
+        {
+            return; // 物理移動をせず待機
+        }
+
         if (waypoints.Length < 2 || _isWaiting) return;
 
         Vector3 targetPos = waypoints[_currentIndex].position;

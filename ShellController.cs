@@ -181,12 +181,21 @@ public class ShellController : MonoBehaviour
 
     private void ApplyDirectDamage(GameObject hitObject)
     {
+        TankStatus ownerTank = Owner != null ? Owner.GetComponent<TankStatus>() : null;
+
+        // ★追加: アイテムボックスへの直撃ダメージ
+        ItemBoxController itemBox = hitObject.GetComponent<ItemBoxController>();
+        if (itemBox != null) { itemBox.TakeDamage(shellData.damage, ownerTank); return; }
+
         ShieldController shield = hitObject.GetComponent<ShieldController>();
         if (shield != null) { shield.TakeShieldDamage(shellData.damage); return; }
+
         WeakPoint weakPoint = hitObject.GetComponent<WeakPoint>();
-        if (weakPoint != null) { weakPoint.TakeWeakPointDamage(shellData.damage); return; }
+        if (weakPoint != null) { weakPoint.TakeWeakPointDamage(shellData.damage, ownerTank); return; }
+
         TankStatus target = hitObject.GetComponentInParent<TankStatus>();
-        if (target != null) target.TakeDamage(shellData.damage);
+        if (target != null) target.TakeDamage(shellData.damage, ownerTank);
+
         if (hitObject.CompareTag("Mine")) hitObject.GetComponentInParent<MineController>()?.Explode();
     }
 
@@ -196,23 +205,29 @@ public class ShellController : MonoBehaviour
         Collider[] hitColliders = Physics.OverlapSphere(transform.position, radius);
         HashSet<TankStatus> damagedBosses = new HashSet<TankStatus>();
 
+        TankStatus ownerTank = Owner != null ? Owner.GetComponent<TankStatus>() : null;
+
         foreach (var hit in hitColliders)
         {
             if (hit.gameObject == gameObject) continue;
             ShellController otherShell = hit.GetComponent<ShellController>();
             if (otherShell != null) { otherShell.TriggerExplosionReaction(); continue; }
 
+            // ★追加: アイテムボックスへの爆風ダメージ
+            ItemBoxController itemBox = hit.GetComponent<ItemBoxController>();
+            if (itemBox != null) itemBox.TakeDamage(shellData.damage, ownerTank);
+
             WeakPoint wp = hit.GetComponent<WeakPoint>();
             if (wp != null && wp.bossStatus != null)
             {
-                wp.TakeWeakPointDamage(shellData.damage);
+                wp.TakeWeakPointDamage(shellData.damage, ownerTank);
                 damagedBosses.Add(wp.bossStatus);
                 continue;
             }
             TankStatus tank = hit.GetComponentInParent<TankStatus>();
             if (tank != null && !damagedBosses.Contains(tank))
             {
-                tank.TakeDamage(shellData.damage);
+                tank.TakeDamage(shellData.damage, ownerTank);
                 damagedBosses.Add(tank);
             }
             DestructibleBlock block = hit.GetComponent<DestructibleBlock>();

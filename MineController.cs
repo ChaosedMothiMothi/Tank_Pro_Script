@@ -123,10 +123,14 @@ target.gameObject.layer == LayerMask.NameToLayer("Explode"))
         {
             if (hit.gameObject == gameObject) continue;
 
+            // ★追加: アイテムボックスへの爆風ダメージ
+            ItemBoxController itemBox = hit.GetComponent<ItemBoxController>();
+            if (itemBox != null) itemBox.TakeDamage(mineData.damage, _ownerStatus);
+
             TankStatus tank = hit.GetComponentInParent<TankStatus>();
             if (tank != null && !damagedTanks.Contains(tank))
             {
-                tank.TakeDamage(mineData.damage);
+                tank.TakeDamage(mineData.damage, _ownerStatus);
                 damagedTanks.Add(tank);
             }
 

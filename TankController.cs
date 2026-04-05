@@ -10,6 +10,10 @@ public class TankController : MonoBehaviour
     [SerializeField] private Transform turretTransform;
     [SerializeField] private Transform firePoint;
 
+    [Header("Mine Settings")]
+    [Tooltip("地雷を設置する位置のZ軸のズレ（マイナスで戦車の後方、0で戦車の中心）")]
+    [SerializeField] private float mineSpawnOffsetZ = 2f; // ← この数値をインスペクターで0などにすれば中心に置けます
+
     private Rigidbody _rb;
     private Vector2 _moveInput;
     private Vector2 _aimInput;
@@ -30,12 +34,15 @@ public class TankController : MonoBehaviour
         _currentAmmoCount = tankStatus.GetTotalMaxAmmo();
     }
 
-    private bool IsGameActive => GameManager.Instance == null || !GameManager.Instance.IsGameFinished();
+    // ★修正: ゲームが「開始されている」かつ「終了していない」時だけ入力を受け付ける
+    private bool IsGameActive => GameManager.Instance == null || (GameManager.Instance.IsGameStarted && !GameManager.Instance.IsGameFinished());
 
     public void OnMove(InputAction.CallbackContext context)
     {
-        if (!IsGameActive) { _moveInput = Vector2.zero; return; }
+        // ★修正: ゲーム開始前でも入力「値」自体は常に受け取って保存しておく（弾かない）
         _moveInput = context.ReadValue<Vector2>();
+
+        // 値が入力されていれば目標の角度だけは計算しておく
         if (_moveInput.sqrMagnitude > 0.01f) UpdateTargetDirection();
     }
 
@@ -174,8 +181,9 @@ public class TankController : MonoBehaviour
         float delay = tankStatus.GetData().minePlacementDelay;
         tankStatus.ApplyStun(delay);
 
-        // ★修正: 設置位置を背後にしてスポーンボックス対応等にも使えるように調整
-        Vector3 spawnPos = transform.position - transform.forward * 1.5f;
+        // ★修正: インスペクターで設定した変数（mineSpawnOffsetZ）を使って位置をずらす
+        // -1.5なら後ろ、0なら中心、1.5なら前に設置されます。
+        Vector3 spawnPos = transform.position + transform.forward * mineSpawnOffsetZ;
 
         // Prefabを取得して生成
         GameObject mineObj = Instantiate(tankStatus.GetMinePrefab(), spawnPos, Quaternion.identity);
@@ -210,23 +218,6 @@ public class TankController : MonoBehaviour
         yield return new WaitForSeconds(tankStatus.GetData().mineCooldown);
     }
 
-    // ★追加: TankStatusのSendMessageから呼ばれるメソッド
-    // これがないと、最大数は増えても撃てる回数（_currentAmmoCount）が増えません
-    private void OnMaxAmmoIncreased()
-    {
-        // ボーナス込みの最新の最大弾数を取得
-        int totalMax = tankStatus.GetTotalMaxAmmo();
-
-        // ★修正: 単純にインクリメントするだけでなく、最大値を超えないようにキャップする
-        // ���イテムを取った瞬間、最大枠が増えた分だけ現在弾数も増やす
-        if (_currentAmmoCount < totalMax)
-        {
-            _currentAmmoCount++;
-        }
-
-        Debug.Log($"Max Ammo Up! Now: {_currentAmmoCount} / {totalMax}");
-    }
-
     // ★修正: リロード時に「合計最大弾数」まで回復させる
     private IEnumerator ReloadAmmoRoutine()
     {
@@ -242,5 +233,11 @@ public class TankController : MonoBehaviour
         {
             _currentAmmoCount++;
         }
+    }
+    public void OnMaxAmmoIncreased()
+    {
+        // 撃てる弾を1発増やす
+        // （※ "currentAmmo" の部分は、実際のPlayerTankController内での「現在の弾数」の変数名に合わせてください。例: _currentAmmo など）
+        _currentAmmoCount++;
     }
 }

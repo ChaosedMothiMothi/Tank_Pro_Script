@@ -10,7 +10,7 @@ public class EnemyData : ScriptableObject
         [InspectorName("びびり")] Coward,
         [InspectorName("積極的")] Aggressive,
         [InspectorName("散歩好き")] Wanderer,
-        [InspectorName("腰巾着")] Sycophant, 
+        [InspectorName("腰巾着")] Sycophant, // 追加
         [InspectorName("リーダーシップ")] Leadership,
     }
 
@@ -26,6 +26,14 @@ public class EnemyData : ScriptableObject
 
     [Tooltip("ターゲット選定基準")]
     public TargetStrategy targetStrategy;
+
+    // ★追加: シンプルモード用のパーツドロップ設定
+    [Header("--- シンプルモード設定 ---")]
+    [Tooltip("この敵が死亡時に落とすパーツの数")]
+    public int partsDropCount = 1;
+
+    [Tooltip("ONにするとボス用ドロップ（生存プレイヤー全員に「ドロップ数+1-プレイヤー数」を配る）になります")]
+    public bool isBossDrop = false;
 
     [Header("Mine Settings")]
     public bool useMine = false;
@@ -66,4 +74,8 @@ public class EnemyData : ScriptableObject
     [Header("--- デバッグ・特殊機能 ---")]
     [Tooltip("【デバッグ用】ONにすると、跳弾でプレイヤーに当たる角度を自動計算し、的確に砲塔を向けて撃つようになります（非常に強力です）")]
     public bool useSmartRicochet = false;
+
+    // ★追加: 射線判定（レイ）の太さを調整するパラメーター
+    [Tooltip("射線シミュレーション時のレイ（球）の太さ。実際の弾の半径（0.3など）に合わせると正確になります。小さすぎるとすり抜け、大きすぎると壁の角に引っかかりやすくなります。")]
+    public float raycastRadius = 0.3f;
 }

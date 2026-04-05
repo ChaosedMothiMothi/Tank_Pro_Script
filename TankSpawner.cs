@@ -62,6 +62,12 @@ public class TankSpawner : MonoBehaviour
     {
         if (_isDestroyed) return;
 
+        // ★追加: ゲーム開始前、または終了時にはスポーンのタイマーを止める
+        if (GameManager.Instance != null && (!GameManager.Instance.IsGameStarted || GameManager.Instance.IsGameFinished()))
+        {
+            return; // 何もせず待機
+        }
+
         if (maxTotalSpawns == 0 || _spawnedCount < maxTotalSpawns)
         {
             _timer += Time.deltaTime;
@@ -106,7 +112,12 @@ public class TankSpawner : MonoBehaviour
 
         // コントローラーの一時無効化
         var enemyCtrl = newTank.GetComponent<EnemyTankController>();
-        if (enemyCtrl != null) enemyCtrl.enabled = false;
+        if (enemyCtrl != null)
+        {
+            enemyCtrl.enabled = false;
+            // ★追加: スポーナーから無限湧きする敵はパーツを落とさないように強制上書きする
+            enemyCtrl.SetDropPartsCount(0);
+        }
 
         var navMeshAgent = newTank.GetComponent<UnityEngine.AI.NavMeshAgent>();
         if (navMeshAgent != null) navMeshAgent.enabled = false;

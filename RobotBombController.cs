@@ -265,10 +265,9 @@ public class RobotBombController : MonoBehaviour
         Destroy(gameObject);
     }
 
-    // ★変更: ダメージ適用処理をMineControllerと統一
+    // ★変更: ダメージ適用処理をMineControllerと統一し、アイテムボックスも破壊可能に
     private void ApplyExplosionDamage()
     {
-        // 爆発半径
         float radius = (_mineData != null) ? _mineData.explosionRadius : explodeRadius;
         int damage = (_mineData != null) ? _mineData.damage : 30;
 
@@ -279,11 +278,15 @@ public class RobotBombController : MonoBehaviour
         {
             if (hit.gameObject == gameObject) continue;
 
+            // ★追加: アイテムボックスへの爆風ダメージ
+            ItemBoxController itemBox = hit.GetComponent<ItemBoxController>();
+            if (itemBox != null) itemBox.TakeDamage(damage, _ownerStatus);
+
             // 1. 戦車へのダメージ（重複防止）
             TankStatus tank = hit.GetComponentInParent<TankStatus>();
             if (tank != null && !damagedTanks.Contains(tank))
             {
-                tank.TakeDamage(damage);
+                tank.TakeDamage(damage, _ownerStatus);
                 damagedTanks.Add(tank);
             }
 
@@ -292,7 +295,6 @@ public class RobotBombController : MonoBehaviour
             if (block != null) block.TakeDamage(damage);
 
             // 3. 他の爆発物（地雷・ロボボム）の誘爆
-            // 自分自身は除外済み
             if (hit.CompareTag("Mine"))
             {
                 MineController otherMine = hit.GetComponentInParent<MineController>();
@@ -307,6 +309,7 @@ public class RobotBombController : MonoBehaviour
             if (shell != null) shell.TriggerExplosionReaction();
         }
     }
+
     [Tooltip("トリガー(すり抜け判定)のオブジェクトと接触した際の処理")]
     private void OnTriggerEnter(Collider other)
     {

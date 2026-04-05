@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using Unity.AI.Navigation;
 
-
 public class StageLoader : MonoBehaviour
 {
     [Header("必須参照")]
@@ -40,10 +39,9 @@ public class StageLoader : MonoBehaviour
             return;
         }
 
-        // ★追加: NavMeshの再構築（これが重要！）
+        // NavMeshの再構築
         if (navMeshSurface != null)
         {
-            // 既存のデータをクリアして作り直す
             navMeshSurface.BuildNavMesh();
             Debug.Log("NavMeshを構築しました");
         }
@@ -55,6 +53,9 @@ public class StageLoader : MonoBehaviour
 
         // 2. スポーンリクエストの作成
         List<SpawnManager.SpawnRequest> requests = new List<SpawnManager.SpawnRequest>();
+
+        // ★追加: 撃破状態を記録するための「通し番号」を用意
+        int uniqueSpawnId = 0;
 
         foreach (var entry in data.spawnEntries)
         {
@@ -68,6 +69,15 @@ public class StageLoader : MonoBehaviour
             Transform targetPoint = mapDesc.spawnPoints[entry.spawnPointIndex];
             if (targetPoint == null) continue;
 
+            // ★追加: 今回生成するオブジェクトの固有IDを取得してカウントアップ
+            int currentId = uniqueSpawnId++;
+
+            // ★追加: すでに撃破済み（または取得済み）なら生成をスキップ！
+            if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.IsDefeated(currentId))
+            {
+                continue;
+            }
+
             // 確率で戦車を決定
             GameObject selectedPrefab = SelectTankByProbability(entry.tankCandidates);
 
@@ -78,7 +88,9 @@ public class StageLoader : MonoBehaviour
                     prefab = selectedPrefab,
                     spawnPoint = targetPoint,
                     team = entry.team,
-                    isCaptain = entry.isCaptain
+                    isCaptain = entry.isCaptain,
+                    isBoss = entry.isBoss,
+                    spawnPointIndex = currentId // ★追加: ここで固有IDを渡す
                 };
                 requests.Add(req);
             }
