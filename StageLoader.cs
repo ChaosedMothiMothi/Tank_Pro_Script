@@ -6,8 +6,6 @@ public class StageLoader : MonoBehaviour
 {
     [Header("必須参照")]
     [SerializeField] private SpawnManager spawnManager;
-
-    // ★追加: シーンに置いたNavMeshSurfaceをアタッチ
     [SerializeField] private NavMeshSurface navMeshSurface;
 
     [Header("デバッグ用")]
@@ -23,7 +21,6 @@ public class StageLoader : MonoBehaviour
 
     private void LoadStage(StageData data)
     {
-        // 1. マップ生成
         if (data.mapPrefab == null)
         {
             Debug.LogError("StageDataにマッププレハブが設定されていません");
@@ -39,90 +36,91 @@ public class StageLoader : MonoBehaviour
             return;
         }
 
-        // NavMeshの再構築
         if (navMeshSurface != null)
         {
             navMeshSurface.BuildNavMesh();
             Debug.Log("NavMeshを構築しました");
         }
-        else
-        {
-            Debug.LogWarning("NavMeshSurfaceがセットされていません！");
-        }
 
-
-        // 2. スポーンリクエストの作成
         List<SpawnManager.SpawnRequest> requests = new List<SpawnManager.SpawnRequest>();
 
-        // ★追加: 撃破状態を記録するための「通し番号」を用意
+        // ★撃破保存用の通し番号
         int uniqueSpawnId = 0;
 
-        foreach (var entry in data.spawnEntries)
+        // 1. 戦車の生成リクエスト
+        if (data.spawnEntries != null)
         {
-            // インデックスチェック
-            if (entry.spawnPointIndex < 0 || entry.spawnPointIndex >= mapDesc.spawnPoints.Count)
+            foreach (var entry in data.spawnEntries)
             {
-                Debug.LogWarning($"不正なSpawnPointIndex: {entry.spawnPointIndex}");
-                continue;
+                int currentId = uniqueSpawnId++;
+
+                // 既に倒されていればスキップ
+                if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.IsDefeated(currentId)) continue;
+                if (entry.spawnPointIndex < 0 || entry.spawnPointIndex >= mapDesc.spawnPoints.Count) continue;
+
+                Transform targetPoint = mapDesc.spawnPoints[entry.spawnPointIndex];
+                if (targetPoint == null) continue;
+
+                GameObject selectedPrefab = SelectTankByProbability(entry.tankCandidates);
+
+                if (selectedPrefab != null)
+                {
+                    SpawnManager.SpawnRequest req = new SpawnManager.SpawnRequest
+                    {
+                        prefab = selectedPrefab,
+                        spawnPoint = targetPoint,
+                        team = entry.team,
+                        isCaptain = entry.isCaptain,
+                        isBoss = entry.isBoss,
+                        spawnPointIndex = currentId
+                    };
+                    requests.Add(req);
+                }
             }
+        }
 
-            Transform targetPoint = mapDesc.spawnPoints[entry.spawnPointIndex];
-            if (targetPoint == null) continue;
-
-            // ★追加: 今回生成するオブジェクトの固有IDを取得してカウントアップ
-            int currentId = uniqueSpawnId++;
-
-            // ★追加: すでに撃破済み（または取得済み）なら生成をスキップ！
-            if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.IsDefeated(currentId))
+        // 2. アイテムボックスの生成リクエスト
+        if (data.itemBoxEntries != null)
+        {
+            foreach (var entry in data.itemBoxEntries)
             {
-                continue;
-            }
+                int currentId = uniqueSpawnId++;
 
-            // 確率で戦車を決定
-            GameObject selectedPrefab = SelectTankByProbability(entry.tankCandidates);
+                // 既に壊されていればスキップ
+                if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.IsDefeated(currentId)) continue;
+                if (entry.spawnPointIndex < 0 || entry.spawnPointIndex >= mapDesc.spawnPoints.Count) continue;
 
-            if (selectedPrefab != null)
-            {
+                Transform targetPoint = mapDesc.spawnPoints[entry.spawnPointIndex];
+                if (targetPoint == null || entry.itemBoxPrefab == null) continue;
+
                 SpawnManager.SpawnRequest req = new SpawnManager.SpawnRequest
                 {
-                    prefab = selectedPrefab,
+                    prefab = entry.itemBoxPrefab,
                     spawnPoint = targetPoint,
-                    team = entry.team,
-                    isCaptain = entry.isCaptain,
-                    isBoss = entry.isBoss,
-                    spawnPointIndex = currentId // ★追加: ここで固有IDを渡す
+                    team = TeamType.Red, // アイテム箱はチームを使わないためダミー値
+                    isCaptain = false,
+                    isBoss = false,
+                    spawnPointIndex = currentId
                 };
                 requests.Add(req);
             }
         }
 
-        // 3. 生成実行
         spawnManager.ExecuteSpawn(requests);
     }
 
-    // 確率抽選ロジック
     private GameObject SelectTankByProbability(List<StageData.TankCandidate> candidates)
     {
         if (candidates == null || candidates.Count == 0) return null;
-
-        // 合計確率を計算
         int totalWeight = 0;
         foreach (var c in candidates) totalWeight += c.probability;
-
-        // 0〜合計値の間でランダムな値を決定
         int randomValue = Random.Range(0, totalWeight);
-
-        // 抽選
         int currentWeight = 0;
         foreach (var c in candidates)
         {
             currentWeight += c.probability;
-            if (randomValue < currentWeight)
-            {
-                return c.tankPrefab;
-            }
+            if (randomValue < currentWeight) return c.tankPrefab;
         }
-
-        return candidates[0].tankPrefab; // フォールバック
+        return candidates[0].tankPrefab;
     }
 }

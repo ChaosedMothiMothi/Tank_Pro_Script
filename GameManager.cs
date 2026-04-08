@@ -1,53 +1,50 @@
 ﻿using UnityEngine;
-using UnityEngine.SceneManagement;
 using System.Collections;
 using System.Collections.Generic;
-using System.Linq;
+using UnityEngine.SceneManagement;
 
 public class GameManager : MonoBehaviour
 {
     public static GameManager Instance { get; private set; }
 
-    [Header("Scene Settings")]
-    [SerializeField] private string menuSceneName = "MenuScene";
+    [Header("Game Settings")]
+    public string nextSceneName;
 
-    [Header("UI Manager")]
+    [Header("Player Indicator Settings")]
+    [Tooltip("ゲーム開始時に表示する文字")]
+    public string playerIndicatorText = "▼ YOU";
+    [Tooltip("インジケーターの色")]
+    public Color playerIndicatorColor = Color.yellow;
+    [Tooltip("文字の大きさ（標準は 5〜10 程度）")]
+    public float playerIndicatorSize = 8f;
+    [Tooltip("プレイヤーの頭上どれくらいの高さに表示するか")]
+    public float playerIndicatorOffsetY = 4.0f;
+
+    [Header("UI References")]
     [SerializeField] private ResultUIManager resultUIManager;
-
-    [Header("Simple Mode Settings")]
-    [Tooltip("敵が落とすパーツのプレハブ")]
-    [SerializeField] private GameObject partsItemPrefab;
-
-    // ★追加: 画面中央に出す「3, 2, 1, START!」用のテキスト
     [SerializeField] private TMPro.TextMeshProUGUI startText;
+    [SerializeField] private TMPro.TextMeshProUGUI partsText;
+
+    [Header("Drop Settings")]
+    public GameObject defaultPartsItemPrefab;
+
+    public bool IsFinished { get; private set; } = false;
+    public bool IsGameStarted { get; private set; } = false;
 
     public int CurrentParts { get; private set; } = 0;
 
-    private const TeamType PlayerTeam = TeamType.Blue;
-
-    // --- 状態管理フラグ ---
-    public bool IsFinished { get; private set; } = false;
-
-    // ★復活: ゲームが開始されたかどうかのフラグ（これがないと戦車が動けない）
-    public bool IsGameStarted { get; private set; } = false;
-
-    // --- 戦車リスト ---
     private List<TankStatus> _allTanks = new List<TankStatus>();
-    private bool _hasMultipleTeamsSpawned = false;
+    private TankStatus _playerTank;
 
     private void Awake()
     {
         if (Instance == null) Instance = this;
         else Destroy(gameObject);
-        // ★修正: Awakeの段階でパーツを引き継いでおく（他より早く設定する）
+
         if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.isSimpleMode)
-        {
             CurrentParts = GlobalGameManager.Instance.savedParts;
-        }
         else
-        {
             CurrentParts = 0;
-        }
     }
 
     private void Start()
@@ -56,15 +53,7 @@ public class GameManager : MonoBehaviour
         IsGameStarted = false;
         _allTanks.Clear();
 
-        // ★追加: シンプルモードなら前回のパーツを引き継ぐ
-        if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.isSimpleMode)
-        {
-            CurrentParts = GlobalGameManager.Instance.savedParts;
-        }
-        else
-        {
-            CurrentParts = 0; // 通常モードなら0から
-        }
+        UpdatePartsText();
 
         foreach (var tank in FindObjectsByType<TankStatus>(FindObjectsSortMode.None))
         {
@@ -74,10 +63,8 @@ public class GameManager : MonoBehaviour
         StartCoroutine(GameStartRoutine());
     }
 
-    // ゲーム開始前のちょっとした待機時間（Ready... GO! の代わり）
     private IEnumerator GameStartRoutine()
     {
-        // ★追加: ステージデータを見てスキップするか判定
         bool skip = false;
         if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.SelectedStage != null)
         {
@@ -86,137 +73,136 @@ public class GameManager : MonoBehaviour
 
         if (skip)
         {
-            // スキップする場合は即座にゲーム開始
             IsGameStarted = true;
             if (startText != null) startText.gameObject.SetActive(false);
             yield break;
         }
 
+        // ★追加・修正: プレイヤーが生成されるのを少しだけ待つ（動的スポーン対策）
+        float waitTimer = 0f;
+        while (_playerTank == null && waitTimer < 1.0f)
+        {
+            foreach (var tank in FindObjectsByType<TankStatus>(FindObjectsSortMode.None))
+            {
+                if (tank.team == TeamType.Blue)
+                {
+                    _playerTank = tank;
+                    RegisterTank(tank);
+                    break;
+                }
+            }
+            waitTimer += Time.deltaTime;
+            yield return null;
+        }
+
+        // ★修正: TextMeshProを使って、確実に綺麗に表示する
+        GameObject playerIndicator = null;
+        if (_playerTank != null)
+        {
+            playerIndicator = new GameObject("PlayerIndicator");
+            playerIndicator.transform.SetParent(_playerTank.transform);
+            playerIndicator.transform.localPosition = new Vector3(0, playerIndicatorOffsetY, 0);
+
+            TMPro.TextMeshPro tmpro = playerIndicator.AddComponent<TMPro.TextMeshPro>();
+            tmpro.text = playerIndicatorText;
+            tmpro.color = playerIndicatorColor;
+            tmpro.fontSize = playerIndicatorSize;
+            tmpro.alignment = TMPro.TextAlignmentOptions.Center;
+            tmpro.fontStyle = TMPro.FontStyles.Bold;
+
+            // アニメーションを開始
+            StartCoroutine(AnimateIndicatorRoutine(playerIndicator));
+        }
+
         if (startText != null)
         {
             startText.gameObject.SetActive(true);
-
             startText.text = "3";
             yield return new WaitForSeconds(0.7f);
-
             startText.text = "2";
             yield return new WaitForSeconds(0.7f);
-
             startText.text = "1";
             yield return new WaitForSeconds(0.7f);
-
             startText.text = "START!";
-            IsGameStarted = true; // ★ここで操作可能になる
-            Debug.Log("<color=green>[Game Started]</color> 戦闘開始！");
 
+            // ゲーム開始と同時にインジケーターを消す
+            if (playerIndicator != null) Destroy(playerIndicator);
+
+            IsGameStarted = true;
             yield return new WaitForSeconds(1.0f);
-            startText.gameObject.SetActive(false); // 文字を消す
+            startText.gameObject.SetActive(false);
         }
         else
         {
-            // テキストがセットされていない場合は今まで通り1.5秒待つだけ
             yield return new WaitForSeconds(1.5f);
+            if (playerIndicator != null) Destroy(playerIndicator);
             IsGameStarted = true;
+        }
+    }
+
+    private IEnumerator AnimateIndicatorRoutine(GameObject indicator)
+    {
+        float t = 0;
+        Vector3 basePos = new Vector3(0, playerIndicatorOffsetY, 0);
+        while (indicator != null)
+        {
+            t += Time.deltaTime * 5f;
+            indicator.transform.localPosition = basePos + new Vector3(0, Mathf.Sin(t) * 0.3f, 0);
+
+            if (Camera.main != null)
+            {
+                indicator.transform.rotation = Camera.main.transform.rotation;
+            }
+            yield return null;
         }
     }
 
     public void RegisterTank(TankStatus tank)
     {
-        if (IsFinished) return;
         if (!_allTanks.Contains(tank))
         {
             _allTanks.Add(tank);
-            CheckTeamCount(); // ★エラーになっていた関数を呼び出し
+            if (tank.team == TeamType.Blue) _playerTank = tank;
         }
     }
 
-    public void OnTankDead(TankStatus tank)
+    public void OnTankDead(TankStatus deadTank)
     {
         if (IsFinished) return;
-        CheckWinCondition();
-    }
 
-    // ★復活: チーム数を数える関数（エラーの原因だった部分��
-    private void CheckTeamCount()
-    {
-        if (_hasMultipleTeamsSpawned) return;
-
-        int teamCount = _allTanks
-            .Where(t => !t.IsDead)
-            .Select(t => t.team)
-            .Distinct()
-            .Count();
-
-        if (teamCount >= 2)
-        {
-            _hasMultipleTeamsSpawned = true;
-        }
-    }
-
-    private void CheckWinCondition()
-    {
-        if (IsFinished) return;
-        if (!_hasMultipleTeamsSpawned) return;
-
-        var aliveTanks = _allTanks.Where(t => !t.IsDead).ToList();
-
-        // 1. プレイヤーチーム（PlayerTeam）の敗北判定
-        if (CheckTeamDefeat(PlayerTeam, aliveTanks))
+        if (deadTank.team == TeamType.Blue)
         {
             FinishGame(false);
-            return;
         }
-
-        // 2. 敵チームの全滅判定
-        var enemyTeams = aliveTanks
-            .Select(t => t.team)
-            .Where(t => t != PlayerTeam)
-            .Distinct()
-            .ToList();
-
-        if (enemyTeams.Count == 0)
+        else if (deadTank.team == TeamType.Red)
         {
-            FinishGame(true);
-            return;
-        }
+            bool hasBoss = false;
+            bool bossAlive = false;
+            int redCount = 0;
 
-        // 3. 残っている敵チームが敗北条件を満たしているか
-        bool allEnemiesLost = true;
-        foreach (var eTeam in enemyTeams)
-        {
-            if (!CheckTeamDefeat(eTeam, aliveTanks))
+            foreach (var t in _allTanks)
             {
-                allEnemiesLost = false;
-                break;
+                if (t != null && t.team == TeamType.Red)
+                {
+                    if (t.isBoss) { hasBoss = true; if (!t.IsDead) bossAlive = true; }
+                    if (!t.IsDead) redCount++;
+                }
+            }
+
+            if (hasBoss)
+            {
+                if (!bossAlive) FinishGame(true);
+            }
+            else
+            {
+                if (redCount == 0) FinishGame(true);
             }
         }
-
-        if (allEnemiesLost)
-        {
-            FinishGame(true);
-        }
     }
 
-    // ★追加: クリアエリア（安全地帯）などに触れた時に強制的にクリア扱いにする
     public void ForceWin()
     {
-        if (IsFinished) return;
-        FinishGame(true);
-    }
-
-    private bool CheckTeamDefeat(TeamType targetTeam, List<TankStatus> currentAliveTanks)
-    {
-        var teamSurvivors = currentAliveTanks.Where(t => t.team == targetTeam).ToList();
-        if (teamSurvivors.Count == 0) return true;
-
-        bool hasCaptainOriginally = _allTanks.Any(t => t.team == targetTeam && t.isCaptain);
-        if (hasCaptainOriginally)
-        {
-            bool captainAlive = teamSurvivors.Any(t => t.isCaptain);
-            if (!captainAlive) return true;
-        }
-
-        return false;
+        if (!IsFinished) FinishGame(true);
     }
 
     private void FinishGame(bool isWin)
@@ -225,48 +211,63 @@ public class GameManager : MonoBehaviour
 
         if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.isSimpleMode)
         {
-            if (isWin)
+            if (_playerTank != null)
             {
-                GlobalGameManager.Instance.savedParts = CurrentParts;
+                GlobalGameManager.Instance.SavePlayerStats(_playerTank);
             }
-            else
+            GlobalGameManager.Instance.savedParts = CurrentParts;
+
+            if (!isWin)
             {
-                // ★負けたら残機を1減らす
                 GlobalGameManager.Instance.playerLives--;
             }
         }
 
         if (resultUIManager != null) resultUIManager.ShowResult(isWin);
-
-
     }
 
-    public bool IsGameFinished()
-    {
-        return IsFinished;
-    }
+    public bool IsGameFinished() => IsFinished;
+    public GameObject GetPartsItemPrefab() => defaultPartsItemPrefab;
 
     public void AddParts(int amount)
     {
         CurrentParts += amount;
-        Debug.Log($"<color=yellow>[Parts Collected]</color> 現在のパーツ: {CurrentParts}");
-
-        // ★追加: 取得した瞬間にGlobalに保存する（リトライしても失わず、稼ぎ防止にもなる）
         if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.isSimpleMode)
         {
             GlobalGameManager.Instance.savedParts = CurrentParts;
         }
+        UpdatePartsText();
     }
 
-    public GameObject GetPartsItemPrefab() => partsItemPrefab;
+    public bool ConsumeParts(int amount)
+    {
+        if (CurrentParts >= amount)
+        {
+            CurrentParts -= amount;
+            if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.isSimpleMode)
+            {
+                GlobalGameManager.Instance.savedParts = CurrentParts;
+            }
+            UpdatePartsText();
+            return true;
+        }
+        return false;
+    }
+
+    private void UpdatePartsText()
+    {
+        if (partsText != null) partsText.text = $"Parts: {CurrentParts}";
+    }
 
     public void RetryGame()
     {
+        Time.timeScale = 1f;
         SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
 
     public void ReturnToMenu()
     {
-        SceneManager.LoadScene(menuSceneName);
+        Time.timeScale = 1f;
+        SceneManager.LoadScene(0);
     }
 }

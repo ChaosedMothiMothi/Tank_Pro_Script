@@ -11,4 +11,6 @@ public enum ItemType
     ChangeShell,     // 弾Prefab変更
     ChangeMine,      // 地雷Prefab変更
     Shield,          // シールド
+    ExtraLife,       //  残機アップ
+    BerserkerMode    //  バーサーカー
 }

@@ -154,9 +154,16 @@ public class EnemyTankController : MonoBehaviour
     private void FixedUpdate()
     {
         if (_rb == null || _rb.isKinematic || tankStatus.IsInStun) return;
-
-        // ★追加: カウントダウン中は物理的な移動力も一切加えない
         if (GameManager.Instance != null && (!GameManager.Instance.IsGameStarted || GameManager.Instance.IsGameFinished())) return;
+
+        // ★追加: スポーンボックスから浮いて生成された際に、AI（NavMesh）が宙に取り残されないように再接続する
+        if (_agent != null && !_agent.isOnNavMesh)
+        {
+            if (UnityEngine.AI.NavMesh.SamplePosition(_rb.position, out UnityEngine.AI.NavMeshHit hit, 2.0f, UnityEngine.AI.NavMesh.AllAreas))
+            {
+                _agent.Warp(hit.position);
+            }
+        }
 
         if (_isActionRigid)
         {
@@ -164,7 +171,15 @@ public class EnemyTankController : MonoBehaviour
             return;
         }
 
-        ExecuteMovement();
+        // ★追加: 暴走モードか通常モードかで「完全に別の関数」を呼ぶように分離
+        if (tankStatus.isJammingBerserk)
+        {
+            ExecuteBerserkMovement();
+        }
+        else
+        {
+            ExecuteMovement();
+        }
     }
 
     private void LateUpdate()
@@ -399,7 +414,6 @@ public class EnemyTankController : MonoBehaviour
         _rb.linearVelocity = new Vector3(0, _rb.linearVelocity.y, 0);
     }
 
-    [Tooltip("AIの思考に基づく物理的な移動処理（優先度付き回避・ランダム揺らぎ・旋回停止）")]
     private void ExecuteMovement()
     {
         if (_isActionRigid || tankStatus.IsInStun)
@@ -414,101 +428,79 @@ public class EnemyTankController : MonoBehaviour
             return;
         }
 
-        // --- 1. 基本の移動方向と「揺らぎ」の計算 ---
         Vector3 baseDir = _agent.desiredVelocity;
-
-        if (enemyData.aiType != EnemyData.AIType.Neat && baseDir.magnitude < 0.1f)
-        {
-            baseDir = transform.forward * tankStatus.GetCurrentMoveSpeed();
-        }
-
+        if (enemyData.aiType != EnemyData.AIType.Neat && baseDir.magnitude < 0.1f) baseDir = transform.forward * tankStatus.GetCurrentMoveSpeed();
         if (enemyData.aiType != EnemyData.AIType.Neat && baseDir.magnitude > 0.1f)
         {
             float wobbleSpeed = (enemyData.aiType == EnemyData.AIType.Idiot) ? 3f : 1.5f;
             float wobbleAmount = (enemyData.aiType == EnemyData.AIType.Idiot) ? 0.8f : 0.3f;
-            Vector3 right = Vector3.Cross(baseDir.normalized, Vector3.up);
-            baseDir += right * Mathf.Sin(Time.time * wobbleSpeed) * wobbleAmount;
+            baseDir += Vector3.Cross(baseDir.normalized, Vector3.up) * Mathf.Sin(Time.time * wobbleSpeed) * wobbleAmount;
         }
 
         Vector3 finalDir = baseDir.normalized;
 
-        // --- 2. ★優先度付きの回避処理（EnemyDataの数値を正確に反映） ---
-
-        // 【優先度：低】自分以外の全戦車を避ける (固定値3.5m)
         Vector3 tankAvoid = GetAvoidanceVector("Tank");
-        if (tankAvoid != Vector3.zero)
-        {
-            finalDir = (finalDir + tankAvoid * 5.0f).normalized;
-        }
+        if (tankAvoid != Vector3.zero) finalDir = (finalDir + tankAvoid * 5.0f).normalized;
 
-        // 【優先度：中】弾・地雷を避ける (EnemyDataの設定値を反映)
         Vector3 deadlyAvoid = GetAvoidanceVector("Deadly");
-        if (deadlyAvoid != Vector3.zero)
-        {
-            finalDir = (finalDir * 0.4f + deadlyAvoid * 3.0f).normalized;
-        }
+        if (deadlyAvoid != Vector3.zero) finalDir = (finalDir * 0.4f + deadlyAvoid * 3.0f).normalized;
 
-        // 【優先度：高】壁を避ける
         Vector3 wallAvoid = GetWallAvoidanceVector(5.0f);
-        if (wallAvoid != Vector3.zero)
-        {
-            finalDir = (finalDir * 0.2f + wallAvoid * 5.0f).normalized;
-        }
+        if (wallAvoid != Vector3.zero) finalDir = (finalDir * 0.2f + wallAvoid * 5.0f).normalized;
 
-        // --- 3. 角スタック防止（スライダー） ---
         if (finalDir.magnitude < 0.1f) finalDir = transform.forward;
 
         int obstacleMask = LayerMask.GetMask("Wall", "Spike");
         if (Physics.SphereCast(transform.position + Vector3.up * 0.5f, 0.5f, finalDir, out RaycastHit sphereHit, 1.2f, obstacleMask))
         {
-            Vector3 wallNormal = sphereHit.normal;
-            wallNormal.y = 0;
+            Vector3 wallNormal = sphereHit.normal; wallNormal.y = 0;
             Vector3 slideDir = Vector3.ProjectOnPlane(finalDir, wallNormal);
-
-            if (slideDir.magnitude > 0.1f)
-            {
-                finalDir = slideDir.normalized;
-            }
-            else
-            {
-                finalDir = wallNormal.normalized;
-            }
+            finalDir = (slideDir.magnitude > 0.1f) ? slideDir.normalized : wallNormal.normalized;
         }
 
-        // --- 4. ★目標方向の平滑化と、移動・回転の適用 ---
-        if (finalDir != Vector3.zero)
-        {
-            _smoothedMoveDir = Vector3.Lerp(_smoothedMoveDir, finalDir, Time.fixedDeltaTime * 6.0f).normalized;
-        }
+        if (finalDir != Vector3.zero) _smoothedMoveDir = Vector3.Lerp(_smoothedMoveDir, finalDir, Time.fixedDeltaTime * 6.0f).normalized;
         if (_smoothedMoveDir == Vector3.zero) _smoothedMoveDir = transform.forward;
 
         if (_smoothedMoveDir.magnitude > 0.1f && enemyData.aiType != EnemyData.AIType.Neat)
         {
             float targetAngle = Mathf.Atan2(_smoothedMoveDir.x, _smoothedMoveDir.z) * Mathf.Rad2Deg;
             float currentY = _rb.rotation.eulerAngles.y;
-            float rotSpeed = tankStatus.GetCurrentRotationSpeed();
-
-            float nextAngle = Mathf.MoveTowardsAngle(currentY, targetAngle, rotSpeed * Time.fixedDeltaTime);
+            float nextAngle = Mathf.MoveTowardsAngle(currentY, targetAngle, tankStatus.GetCurrentRotationSpeed() * Time.fixedDeltaTime);
             _rb.MoveRotation(Quaternion.Euler(0, nextAngle, 0));
 
-            float angleDiff = Mathf.Abs(Mathf.DeltaAngle(currentY, targetAngle));
-
-            if (angleDiff > 45.0f)
-            {
-                _rb.linearVelocity = new Vector3(0, _rb.linearVelocity.y, 0);
-            }
+            if (Mathf.Abs(Mathf.DeltaAngle(currentY, targetAngle)) > 45.0f) _rb.linearVelocity = new Vector3(0, _rb.linearVelocity.y, 0);
             else
             {
                 Vector3 vel = transform.forward * tankStatus.GetCurrentMoveSpeed();
                 _rb.linearVelocity = new Vector3(vel.x, _rb.linearVelocity.y, vel.z);
             }
         }
-        else
-        {
-            StopMovementImmediate();
-        }
+        else StopMovementImmediate();
 
         if (_agent != null && _agent.isOnNavMesh) _agent.nextPosition = _rb.position;
+    }
+
+    [Tooltip("暴走モード（ジャミング特攻）中の専用移動処理：曲がらずに一直線で突撃する")]
+    private void ExecuteBerserkMovement()
+    {
+        // NavMesh（AIの経路探索）の干渉を完全に切る
+        if (_agent != null && _agent.isOnNavMesh)
+        {
+            _agent.isStopped = true;
+        }
+
+        // TankStatusに保存された「ジャミングを受けた瞬間に砲塔が向いていた方向」を取得
+        Vector3 dashDir = tankStatus.berserkDirection;
+
+        // 車体の向き（見た目）を、突撃方向に一瞬で合わせる
+        _rb.MoveRotation(Quaternion.LookRotation(dashDir));
+
+        // 速度2倍で、一切曲がることなく一直線に突っ込む（ロケット突撃）
+        Vector3 vel = dashDir * tankStatus.GetCurrentMoveSpeed();
+        _rb.linearVelocity = new Vector3(vel.x, _rb.linearVelocity.y, vel.z);
+
+        // 実際の物理座標をNavMeshエージェントに上書きしてズレを防ぐ
+        if (_agent != null) _agent.nextPosition = _rb.position;
     }
 
     // --- 回避ベクトル計算用のヘルパー関数 ---
@@ -679,41 +671,46 @@ public class EnemyTankController : MonoBehaviour
     private IEnumerator MineRoutine()
     {
         _isActionRigid = true;
-
         GameObject prefabToUse = minePrefab != null ? minePrefab : tankStatus.GetMinePrefab();
 
         if (prefabToUse != null)
         {
             GameObject mineObj = Instantiate(prefabToUse, transform.position, Quaternion.identity);
 
-            // ★修正: 通常地雷とロボットボムの両対応
-            MineController mineCtrl = mineObj.GetComponent<MineController>();
-            if (mineCtrl != null)
+            // ★修正: 地雷、ロボットボムに加えて、タンクボックスも正しくチームを渡して起動するように変更
+            if (mineObj.TryGetComponent(out MineController mineCtrl))
             {
                 mineCtrl.Init(tankStatus, tankStatus.GetMineData());
                 tankStatus.OnMinePlaced();
             }
-            else
+            else if (mineObj.TryGetComponent(out RobotBombController robotBomb))
             {
-                RobotBombController robotBomb = mineObj.GetComponent<RobotBombController>();
-                if (robotBomb != null)
-                {
-                    robotBomb.Init(tankStatus, tankStatus.GetMineData());
-                    tankStatus.OnMinePlaced();
-                }
+                robotBomb.Init(tankStatus, tankStatus.GetMineData());
+                tankStatus.OnMinePlaced();
+            }
+            else if (mineObj.TryGetComponent(out TankSpawnerBox spawnerBox))
+            {
+                spawnerBox.Init(tankStatus, tankStatus.team);
+                tankStatus.OnMinePlaced();
             }
         }
-
         yield return new WaitForSeconds(tankStatus.GetData().shotDelay);
         _isActionRigid = false;
     }
 
-    [Tooltip("砲塔の回転とターゲティングを行うAI処理")]
     private void HandleTurretAI()
     {
+        // ★修正: リターンで終了してしまう前に、必ずターゲット（敵）を探す処理を行う
         ThinkTarget();
 
         if (turretTransform == null) return;
+
+        // 暴走モード中は砲塔を正面に固定して終了（既存の処理には干渉しない）
+        if (tankStatus.isJammingBerserk)
+        {
+            _independentTurretRotation = transform.rotation;
+            return;
+        }
 
         Vector3 targetDir = Vector3.forward;
         if (_currentTarget != null)
@@ -723,7 +720,6 @@ public class EnemyTankController : MonoBehaviour
             if (enemyData.useSmartRicochet)
             {
                 _smartAimTimer -= Time.deltaTime;
-                // ★修正: 索敵頻度を0.2秒から「0.1秒」に上げ、より素早くルートを見つける
                 if (_smartAimTimer <= 0f)
                 {
                     _smartAimDir = FindSmartRicochetDirection();
@@ -750,7 +746,6 @@ public class EnemyTankController : MonoBehaviour
         {
             _turretNoiseTime += Time.deltaTime * 0.8f;
             float noise = Mathf.PerlinNoise(_turretNoiseTime, 0f) * 2.0f - 1.0f;
-            // 索敵範囲を広めにとり、周囲を常に警戒しているように見せる
             offsetAngle = noise * (enemyData.turretSearchAngle + 30f);
         }
 
@@ -759,7 +754,6 @@ public class EnemyTankController : MonoBehaviour
             Quaternion baseRot = Quaternion.LookRotation(targetDir);
             Quaternion finalRot = baseRot * Quaternion.Euler(0, offsetAngle, 0);
 
-            // ロックオン時の減速を廃止し、設定された速度で素早く向くようにしました
             _independentTurretRotation = Quaternion.RotateTowards(_independentTurretRotation, finalRot, enemyData.turretRotationSpeed * Time.deltaTime);
         }
     }

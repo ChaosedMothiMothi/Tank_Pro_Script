@@ -10,18 +10,25 @@ public class GlobalGameManager : MonoBehaviour
 
     [Header("--- シンプルモード設定 ---")]
     public List<StageData> simpleModeStages = new List<StageData>();
-
     public bool isSimpleMode = false;
     public int currentSimpleStageIndex = 0;
     public int savedParts = 0;
 
     [Header("--- 残機システム ---")]
-    [Tooltip("シンプルモード開始時の残機数")]
     public int defaultPlayerLives = 3;
     public int playerLives = 3;
 
-    // ステージごとの撃破済みオブジェクトのインデックスを保存
     private Dictionary<int, HashSet<int>> _defeatedEntities = new Dictionary<int, HashSet<int>>();
+
+    // ==========================================
+    // ★追加・修正：ステータスや装備の引き継ぎデータ
+    // ==========================================
+    public int savedLevelBounces, savedLevelMaxAmmo, savedLevelMoveSpeed, savedLevelShellSpeed;
+    public int savedLevelMineLimit, savedLevelRotationSpeed, savedLevelShellDamage, savedLevelMineDamage;
+    public GameObject savedShellPrefab;
+    public GameObject savedMinePrefab;
+    public ShieldData savedShieldData;
+    public bool savedIsBerserker = false; // ★バーサーカーモードの保存用
 
     private void Awake()
     {
@@ -30,13 +37,9 @@ public class GlobalGameManager : MonoBehaviour
             Instance = this;
             DontDestroyOnLoad(gameObject);
         }
-        else
-        {
-            Destroy(gameObject);
-        }
+        else Destroy(gameObject);
     }
 
-    // ★メニュー画面のボタンから呼び出す関数（シーン名を引数に渡す）
     public void StartSimpleModeAndLoad(string battleSceneName)
     {
         isSimpleMode = true;
@@ -44,6 +47,13 @@ public class GlobalGameManager : MonoBehaviour
         savedParts = 0;
         playerLives = defaultPlayerLives;
         _defeatedEntities.Clear();
+
+        // 初期化
+        savedLevelBounces = savedLevelMaxAmmo = savedLevelMoveSpeed = savedLevelShellSpeed = 0;
+        savedLevelMineLimit = savedLevelRotationSpeed = savedLevelShellDamage = savedLevelMineDamage = 0;
+        savedShellPrefab = savedMinePrefab = null;
+        savedShieldData = null;
+        savedIsBerserker = false;
 
         if (simpleModeStages.Count > 0)
         {
@@ -60,29 +70,38 @@ public class GlobalGameManager : MonoBehaviour
         {
             currentSimpleStageIndex++;
             SelectedStage = simpleModeStages[currentSimpleStageIndex];
-            _defeatedEntities[currentSimpleStageIndex] = new HashSet<int>(); // 次のステージ用に空枠を作成
+            _defeatedEntities[currentSimpleStageIndex] = new HashSet<int>();
         }
     }
 
-    // 死亡時にインデックスを記録
     public void RecordDefeat(int spawnIndex)
     {
         if (!isSimpleMode || spawnIndex < 0) return;
-        if (!_defeatedEntities.ContainsKey(currentSimpleStageIndex))
-        {
-            _defeatedEntities[currentSimpleStageIndex] = new HashSet<int>();
-        }
+        if (!_defeatedEntities.ContainsKey(currentSimpleStageIndex)) _defeatedEntities[currentSimpleStageIndex] = new HashSet<int>();
         _defeatedEntities[currentSimpleStageIndex].Add(spawnIndex);
     }
 
-    // すでに撃破済みか確認
     public bool IsDefeated(int spawnIndex)
     {
         if (!isSimpleMode) return false;
-        if (_defeatedEntities.ContainsKey(currentSimpleStageIndex))
-        {
-            return _defeatedEntities[currentSimpleStageIndex].Contains(spawnIndex);
-        }
+        if (_defeatedEntities.ContainsKey(currentSimpleStageIndex)) return _defeatedEntities[currentSimpleStageIndex].Contains(spawnIndex);
         return false;
+    }
+
+    // ★ステータスの保存処理
+    public void SavePlayerStats(TankStatus player)
+    {
+        savedLevelBounces = player.levelBounces;
+        savedLevelMaxAmmo = player.levelMaxAmmo;
+        savedLevelMoveSpeed = player.levelMoveSpeed;
+        savedLevelShellSpeed = player.levelShellSpeed;
+        savedLevelMineLimit = player.levelMineLimit;
+        savedLevelRotationSpeed = player.levelRotationSpeed;
+        savedLevelShellDamage = player.levelShellDamage;
+        savedLevelMineDamage = player.levelMineDamage;
+        savedShellPrefab = player.GetShellPrefab();
+        savedMinePrefab = player.GetMinePrefab();
+        savedShieldData = player.currentShieldData;
+        savedIsBerserker = player.isBerserkerMode; // ★バーサーカー状態の保存
     }
 }

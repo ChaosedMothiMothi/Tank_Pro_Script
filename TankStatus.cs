@@ -7,7 +7,7 @@ public class TankStatus : MonoBehaviour
     [Header("Data References")]
     [SerializeField] private TankStatusData tankData;
 
-    [Header("Prefabs & Settings (Dataにないもの)")]
+    [Header("Prefabs & Settings")]
     [SerializeField] private GameObject shellPrefab;
     [SerializeField] private GameObject minePrefab;
     [SerializeField] private MineData mineData;
@@ -29,51 +29,72 @@ public class TankStatus : MonoBehaviour
     [SerializeField] private int weakPointBonusDamage = 10;
 
     [Header("Buff Data")]
-    [Tooltip("レベルごとの上がり幅を設定したデータを入れます")]
     public BuffStepData buffData;
 
-    // --- 内部パラメータ ---
     public int CurrentHp { get; private set; }
     public bool IsDead { get; private set; } = false;
     public int ActiveMineCount { get; set; } = 0;
 
-    // 各ステータスのレベル
-    public int levelBounces { get; private set; } = 0; // 上限5
-    public int levelMaxAmmo { get; private set; } = 0; // ★上限3に変更
+    public int levelBounces { get; private set; } = 0;
+    public int levelMaxAmmo { get; private set; } = 0;
     public int levelMoveSpeed { get; private set; } = 0;
     public int levelShellSpeed { get; private set; } = 0;
     public int levelMineLimit { get; private set; } = 0;
     public int levelRotationSpeed { get; private set; } = 0;
-    public int levelShellDamage { get; private set; } = 0; // 上限10
-    public int levelMineDamage { get; private set; } = 0;  // 上限10
+    public int levelShellDamage { get; private set; } = 0;
+    public int levelMineDamage { get; private set; } = 0;
+
+    public bool isBerserkerMode { get; private set; } = false;
+
+    // 暴走自爆モードフラグと、突撃方向の保存
+    public bool isJammingBerserk { get; private set; } = false;
+    public Vector3 berserkDirection { get; private set; } = Vector3.forward;
+
+    public ShieldData currentShieldData;
 
     public bool IsInStun { get; set; } = false;
     private float _stunTimer = 0f;
+
+    public bool IsJammed { get; private set; } = false;
+    private float _jamTimer = 0f;
+
     public TankStatus LastAttacker { get; private set; }
 
     private ShieldController _currentShield;
     private ShieldController _activeShield;
+    private Rigidbody _rb;
 
     private void Start()
     {
+        _rb = GetComponent<Rigidbody>();
+
         if (tankData != null)
         {
             CurrentHp = tankData.maxHp;
             if (tankData.startingShield != null) EquipShield(tankData.startingShield);
         }
-        else
-        {
-            CurrentHp = 100;
-        }
+        else CurrentHp = 100;
 
-        if (tankData != null && tankData.maxHp >= 10)
-        {
-            if (HPBarManager.Instance != null) HPBarManager.Instance.RegisterTank(this);
-        }
+        if (tankData != null && tankData.maxHp >= 10 && HPBarManager.Instance != null)
+            HPBarManager.Instance.RegisterTank(this);
 
-        if (GameManager.Instance != null)
+        if (GameManager.Instance != null) GameManager.Instance.RegisterTank(this);
+
+        if (team == TeamType.Blue && GlobalGameManager.Instance != null && GlobalGameManager.Instance.isSimpleMode)
         {
-            GameManager.Instance.RegisterTank(this);
+            levelBounces = GlobalGameManager.Instance.savedLevelBounces;
+            levelMaxAmmo = GlobalGameManager.Instance.savedLevelMaxAmmo;
+            levelMoveSpeed = GlobalGameManager.Instance.savedLevelMoveSpeed;
+            levelShellSpeed = GlobalGameManager.Instance.savedLevelShellSpeed;
+            levelMineLimit = GlobalGameManager.Instance.savedLevelMineLimit;
+            levelRotationSpeed = GlobalGameManager.Instance.savedLevelRotationSpeed;
+            levelShellDamage = GlobalGameManager.Instance.savedLevelShellDamage;
+            levelMineDamage = GlobalGameManager.Instance.savedLevelMineDamage;
+            isBerserkerMode = GlobalGameManager.Instance.savedIsBerserker;
+
+            if (GlobalGameManager.Instance.savedShellPrefab != null) shellPrefab = GlobalGameManager.Instance.savedShellPrefab;
+            if (GlobalGameManager.Instance.savedMinePrefab != null) minePrefab = GlobalGameManager.Instance.savedMinePrefab;
+            if (GlobalGameManager.Instance.savedShieldData != null) EquipShield(GlobalGameManager.Instance.savedShieldData);
         }
     }
 
@@ -84,42 +105,90 @@ public class TankStatus : MonoBehaviour
             _stunTimer -= Time.deltaTime;
             if (_stunTimer <= 0f) IsInStun = false;
         }
+
+        if (IsJammed)
+        {
+            _jamTimer -= Time.deltaTime;
+            if (_jamTimer <= 0f) IsJammed = false;
+        }
+    }
+
+    // ジャミング波に触れた瞬間、砲塔の向きを保存して暴走スタート
+    public void ActivateJammingBerserk(Transform turretTransform)
+    {
+        if (IsDead || isJammingBerserk) return;
+
+        isJammingBerserk = true;
+        IsJammed = false;
+        IsInStun = false;
+
+        // ★エラー修正箇所: 一度ローカル変数(dir)に受けてからyを0にして、プロパティに代入する
+        Vector3 dir = Vector3.forward;
+        if (turretTransform != null)
+        {
+            dir = turretTransform.forward;
+        }
+        else
+        {
+            dir = transform.forward;
+        }
+
+        dir.y = 0; // 上下方向のブレを消す
+        berserkDirection = dir.normalized;
+
+        foreach (var r in GetComponentsInChildren<Renderer>())
+        {
+            if (r != null) r.material.color = new Color(1f, 0.5f, 0.5f);
+        }
+    }
+
+    // 暴走中は何にぶつかっても即自爆する
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (!isJammingBerserk || IsDead) return;
+
+        if (collision.gameObject.CompareTag("Floor") || collision.gameObject.layer == LayerMask.NameToLayer("Floor")) return;
+
+        CurrentHp = 0;
+        Die();
+    }
+
+    private void OnTriggerEnter(Collider other)
+    {
+        if (!isJammingBerserk || IsDead) return;
+
+        if (other.gameObject.CompareTag("Floor") || other.gameObject.layer == LayerMask.NameToLayer("Floor")) return;
+
+        if (other.GetComponent<JammingWave>() != null) return;
+
+        CurrentHp = 0;
+        Die();
     }
 
     public void ApplyPowerUp(ItemType type)
     {
         switch (type)
         {
-            case ItemType.BouncePlus:
-                if (levelBounces < 5) levelBounces++;
-                break;
+            case ItemType.BouncePlus: if (levelBounces < 5) levelBounces++; break;
             case ItemType.MaxAmmoPlus:
-                // ★最大弾数の上限を3に修正
                 if (levelMaxAmmo < 3)
                 {
                     levelMaxAmmo++;
                     SendMessage("OnMaxAmmoIncreased", SendMessageOptions.DontRequireReceiver);
                 }
                 break;
-            case ItemType.MoveSpeedUp:
-                if (levelMoveSpeed < 5) levelMoveSpeed++;
+            case ItemType.MoveSpeedUp: if (levelMoveSpeed < 5) levelMoveSpeed++; break;
+            case ItemType.ShellSpeedUp: if (levelShellSpeed < 5) levelShellSpeed++; break;
+            case ItemType.TurnSpeedUp: if (levelRotationSpeed < 5) levelRotationSpeed++; break;
+            case ItemType.MineLimitUp: if (levelMineLimit < 5) levelMineLimit++; break;
+            case ItemType.ShellDamageUp: if (levelShellDamage < 10) levelShellDamage++; break;
+            case ItemType.MineDamageUp: if (levelMineDamage < 10) levelMineDamage++; break;
+            case ItemType.ExtraLife:
+                if (GlobalGameManager.Instance != null) GlobalGameManager.Instance.playerLives++;
                 break;
-            case ItemType.ShellSpeedUp:
-                if (levelShellSpeed < 5) levelShellSpeed++;
+            case ItemType.BerserkerMode:
+                isBerserkerMode = !isBerserkerMode;
                 break;
-            case ItemType.TurnSpeedUp:
-                if (levelRotationSpeed < 5) levelRotationSpeed++;
-                break;
-            case ItemType.MineLimitUp:
-                if (levelMineLimit < 5) levelMineLimit++;
-                break;
-            case ItemType.ShellDamageUp:
-                if (levelShellDamage < 10) levelShellDamage++;
-                break;
-            case ItemType.MineDamageUp:
-                if (levelMineDamage < 10) levelMineDamage++;
-                break;
-
             case ItemType.Shield: break;
             case ItemType.ChangeShell: break;
             case ItemType.ChangeMine: break;
@@ -130,17 +199,14 @@ public class TankStatus : MonoBehaviour
     {
         if (IsDead) return;
         if (GameManager.Instance != null && GameManager.Instance.IsGameFinished()) return;
+        if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.SelectedStage != null)
+            if (GlobalGameManager.Instance.SelectedStage.isInvincibleStage) return;
 
         if (attacker != null) LastAttacker = attacker;
-
         if (_currentShield != null) return;
 
         CurrentHp -= damage;
-
-        if (HPBarManager.Instance != null)
-        {
-            HPBarManager.Instance.UpdateHP(this, CurrentHp, tankData != null ? tankData.maxHp : 100);
-        }
+        if (HPBarManager.Instance != null) HPBarManager.Instance.UpdateHP(this, CurrentHp, tankData != null ? tankData.maxHp : 100);
 
         if (CurrentHp <= 0) Die();
     }
@@ -151,7 +217,6 @@ public class TankStatus : MonoBehaviour
         if (GameManager.Instance != null && GameManager.Instance.IsGameFinished()) return;
 
         IsDead = true;
-
         if (GameManager.Instance != null) GameManager.Instance.OnTankDead(this);
 
         if (GlobalGameManager.Instance != null && team != TeamType.Blue && spawnIndex >= 0)
@@ -159,14 +224,10 @@ public class TankStatus : MonoBehaviour
             GlobalGameManager.Instance.RecordDefeat(spawnIndex);
         }
 
-        if (tankData != null && tankData.isSelfDestruct)
-        {
+        if (isJammingBerserk || (tankData != null && tankData.isSelfDestruct))
             StartCoroutine(SelfDestructSequence());
-        }
         else
-        {
             StartCoroutine(PerformDeathSequence(false));
-        }
     }
 
     private IEnumerator SelfDestructSequence()
@@ -175,6 +236,9 @@ public class TankStatus : MonoBehaviour
         if (rb != null) { rb.linearVelocity = Vector3.zero; rb.isKinematic = true; }
 
         float duration = (tankData != null) ? tankData.selfDestructInterval : 2.0f;
+
+        if (isJammingBerserk) duration = 0.1f;
+
         float timer = 0f;
         float flashSpeed = 0.1f;
         Renderer[] renderers = GetComponentsInChildren<Renderer>();
@@ -196,14 +260,12 @@ public class TankStatus : MonoBehaviour
                 TankStatus target = hit.GetComponentInParent<TankStatus>();
                 if (target != null && !target.IsDead) target.TakeDamage(tankData.selfDestructDamage, this);
             }
-
             if (tankData.selfDestructExplosionPrefab != null)
             {
                 GameObject exp = Instantiate(tankData.selfDestructExplosionPrefab, transform.position, Quaternion.identity);
                 Destroy(exp, 3.0f);
             }
         }
-
         StartCoroutine(PerformDeathSequence(true));
     }
 
@@ -212,7 +274,6 @@ public class TankStatus : MonoBehaviour
         if (EffectManager.Instance != null) EffectManager.Instance.PlayExplosion(transform.position);
 
         List<GameObject> activeParts = new List<GameObject>();
-
         if (partsToScatter != null && partsToScatter.Count > 0)
         {
             foreach (var part in partsToScatter)
@@ -242,7 +303,6 @@ public class TankStatus : MonoBehaviour
 
         foreach (var r in GetComponentsInChildren<Renderer>()) r.enabled = false;
         foreach (var c in GetComponentsInChildren<Collider>()) c.enabled = false;
-
         Rigidbody mainRb = GetComponent<Rigidbody>();
         if (mainRb != null) mainRb.isKinematic = true;
 
@@ -251,7 +311,6 @@ public class TankStatus : MonoBehaviour
             if (part == null) continue;
             StartCoroutine(ExplodeOnePart(part));
         }
-
         yield return new WaitForSeconds(4.0f);
         Destroy(gameObject);
     }
@@ -271,20 +330,14 @@ public class TankStatus : MonoBehaviour
                 GameObject exp = Instantiate(effectPrefab, part.transform.position, Quaternion.identity);
                 Destroy(exp, 2.0f);
             }
-            else if (EffectManager.Instance != null)
-            {
-                EffectManager.Instance.PlayExplosion(part.transform.position);
-            }
+            else if (EffectManager.Instance != null) EffectManager.Instance.PlayExplosion(part.transform.position);
             Destroy(part);
         }
     }
 
     public void SetTeam(TeamType newTeam, bool asCaptain = false, bool asBoss = false, int spawnIdx = -1)
     {
-        team = newTeam;
-        isCaptain = asCaptain;
-        isBoss = asBoss;
-        spawnIndex = spawnIdx;
+        team = newTeam; isCaptain = asCaptain; isBoss = asBoss; spawnIndex = spawnIdx;
     }
 
     public void EquipShield(ShieldData newShieldData)
@@ -296,6 +349,7 @@ public class TankStatus : MonoBehaviour
         shieldObj.transform.localRotation = Quaternion.identity;
         _activeShield = shieldObj.GetComponent<ShieldController>();
         if (_activeShield != null) _activeShield.Init(this, newShieldData);
+        currentShieldData = newShieldData;
     }
 
     public void ChangeShellPrefab(GameObject newPrefab) { if (newPrefab != null) shellPrefab = newPrefab; }
@@ -307,18 +361,30 @@ public class TankStatus : MonoBehaviour
     public void OnMinePlaced() => ActiveMineCount++;
     public void ApplyStun(float duration) { if (IsDead) return; IsInStun = true; _stunTimer = duration; }
 
+    public void ApplyJamming(float duration) { if (IsDead) return; IsJammed = true; _jamTimer = duration; }
+
     public TankStatusData GetData() => tankData;
 
     public float GetCurrentMoveSpeed()
     {
+        if (IsJammed && !isJammingBerserk) return 0f;
+
         float baseSpeed = tankData != null ? tankData.moveSpeed : 5.0f;
         baseSpeed += bonusMoveSpeed;
         if (_activeShield != null && _activeShield.Data != null) baseSpeed -= _activeShield.Data.speedPenalty;
+
+        if (isBerserkerMode || isJammingBerserk) baseSpeed *= 2.0f;
+
         return Mathf.Max(1.0f, baseSpeed);
     }
 
-    public int GetTotalMaxAmmo() => ((tankData != null) ? tankData.maxAmmo : 5) + bonusMaxAmmo;
+    public float GetCurrentRotationSpeed()
+    {
+        if (IsJammed && !isJammingBerserk) return 0f;
+        return ((tankData != null) ? tankData.rotationSpeed : 90f) + bonusRotationSpeed;
+    }
 
+    public int GetTotalMaxAmmo() => ((tankData != null) ? tankData.maxAmmo : 5) + bonusMaxAmmo;
     public int GetTotalRicochetCount()
     {
         int baseCount = 0;
@@ -329,10 +395,7 @@ public class TankStatus : MonoBehaviour
         }
         return baseCount + bonusBounces;
     }
-
     public int GetTotalMineLimit() => ((tankData != null) ? tankData.maxMines : 3) + bonusMineLimit;
-
-    public float GetCurrentRotationSpeed() => ((tankData != null) ? tankData.rotationSpeed : 90f) + bonusRotationSpeed;
 
     public int GetTotalShellDamage(int baseDamage) => baseDamage + (buffData != null ? buffData.shellDamageBonus[Mathf.Min(levelShellDamage, buffData.shellDamageBonus.Length - 1)] : levelShellDamage * 10);
     public int GetTotalMineDamage(int baseDamage) => baseDamage + (buffData != null ? buffData.mineDamageBonus[Mathf.Min(levelMineDamage, buffData.mineDamageBonus.Length - 1)] : levelMineDamage * 20);
@@ -347,9 +410,6 @@ public class TankStatus : MonoBehaviour
     public GameObject GetMinePrefab() => minePrefab;
     public MineData GetMineData() => mineData;
 
-    // =========================================================
-    // 他のスクリプトからの参照エラーを防ぐ互換用プロパティ（BuffStepData参照）
-    // =========================================================
     public int bonusBounces => buffData != null ? buffData.bounceBonus[Mathf.Min(levelBounces, buffData.bounceBonus.Length - 1)] : levelBounces;
     public int bonusMaxAmmo => buffData != null ? buffData.maxAmmoBonus[Mathf.Min(levelMaxAmmo, buffData.maxAmmoBonus.Length - 1)] : levelMaxAmmo;
     public float bonusMoveSpeed => buffData != null ? buffData.moveSpeedBonus[Mathf.Min(levelMoveSpeed, buffData.moveSpeedBonus.Length - 1)] : levelMoveSpeed * 1.0f;

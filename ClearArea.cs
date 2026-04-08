@@ -5,16 +5,16 @@ public class ClearArea : MonoBehaviour
 {
     private void OnTriggerEnter(Collider other)
     {
-        // 触れたのが戦車かどうか
         TankStatus status = other.GetComponentInParent<TankStatus>();
         if (status == null) status = other.GetComponent<TankStatus>();
 
-        // プレイヤー（TeamType.Blue）ならクリア処理
         if (status != null && status.team == TeamType.Blue && !status.IsDead)
         {
+            // ★追加: クリア時にプレイヤーのステータスを保存する
             if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.isSimpleMode)
             {
-                // ★シンプルモードの場合は、リザルトを出さずに直接次のステージへ
+                GlobalGameManager.Instance.SavePlayerStats(status);
+
                 if (GlobalGameManager.Instance.HasNextStage())
                 {
                     GlobalGameManager.Instance.GoToNextStage();
@@ -22,13 +22,11 @@ public class ClearArea : MonoBehaviour
                 }
                 else
                 {
-                    // 最後のステージだった場合は普通にクリア（Win表示）
                     if (GameManager.Instance != null) GameManager.Instance.ForceWin();
                 }
             }
             else
             {
-                // ★通常モードの場合は普通にクリア（Win表示）
                 if (GameManager.Instance != null) GameManager.Instance.ForceWin();
             }
         }
