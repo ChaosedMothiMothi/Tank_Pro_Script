@@ -31,8 +31,10 @@ public class TankSpawnerBox : MonoBehaviour
     private bool _isProcessed = false;
     private Collider _myCollider;
 
+    // クラスの最初の方にある変数宣言に追加
     private TankStatus _myTankStatus;
     private GameObject _dummyVisual;
+    private int _currentBoxHp; // ★追加: 箱専用の独立したHP変数
 
     private void Awake()
     {
@@ -56,22 +58,31 @@ public class TankSpawnerBox : MonoBehaviour
         _owner = owner;
         _team = team;
 
-        _myTankStatus.SetTeam(_team, false, false, -1);
+        // ★修正: TankStatusの厄介なダメージ処理を避け、箱独自のHPに設定する
+        _currentBoxHp = maxHp;
 
-        var hpProp = typeof(TankStatus).GetProperty("CurrentHp", BindingFlags.Public | BindingFlags.Instance);
-        if (hpProp != null) hpProp.SetValue(_myTankStatus, maxHp);
+        if (_myTankStatus != null)
+        {
+            _myTankStatus.SetTeam(_team, false, false, -1);
+        }
+
+        Collider[] myColliders = GetComponentsInChildren<Collider>();
 
         if (_owner != null)
         {
             Collider[] ownerColliders = _owner.GetComponentsInChildren<Collider>();
-            if (_myCollider != null)
+
+            if (myColliders != null && myColliders.Length > 0 && ownerColliders != null)
             {
-                foreach (var c in ownerColliders)
+                foreach (var myCol in myColliders)
                 {
-                    Physics.IgnoreCollision(_myCollider, c, true);
+                    foreach (var ownerCol in ownerColliders)
+                    {
+                        Physics.IgnoreCollision(myCol, ownerCol, true);
+                    }
                 }
             }
-            StartCoroutine(RestoreCollisionRoutine(ownerColliders));
+            StartCoroutine(RestoreCollisionRoutine(myColliders, ownerColliders));
         }
 
         CreateDummyVisual();
@@ -80,8 +91,8 @@ public class TankSpawnerBox : MonoBehaviour
 
     private void Update()
     {
-        // ★修正: ダメージを受けてHPが0以下になるか、死んだ判定になったら破壊処理へ
-        if (_myTankStatus != null && (_myTankStatus.IsDead || _myTankStatus.CurrentHp <= 0) && !_isProcessed)
+        // ★修正: 箱専用のHPが0以下になったら破壊する
+        if (_currentBoxHp <= 0 && !_isProcessed)
         {
             BreakBox();
         }
@@ -124,14 +135,19 @@ public class TankSpawnerBox : MonoBehaviour
         }
     }
 
-    private IEnumerator RestoreCollisionRoutine(Collider[] ownerColliders)
+    private IEnumerator RestoreCollisionRoutine(Collider[] myColliders, Collider[] ownerColliders)
     {
-        yield return new WaitForSeconds(1.5f);
-        if (_myCollider != null && ownerColliders != null)
+        yield return new WaitForSeconds(3.0f);
+
+        if (myColliders != null && ownerColliders != null)
         {
-            foreach (var c in ownerColliders)
+            foreach (var myCol in myColliders)
             {
-                if (c != null) Physics.IgnoreCollision(_myCollider, c, false);
+                if (myCol == null) continue;
+                foreach (var ownerCol in ownerColliders)
+                {
+                    if (ownerCol != null) Physics.IgnoreCollision(myCol, ownerCol, false);
+                }
             }
         }
     }
@@ -298,25 +314,32 @@ public class TankSpawnerBox : MonoBehaviour
         CheckHit(collision.gameObject);
     }
 
+    // ============================================
+    // ★修正: 弾や爆風との衝突判定（味方の弾もキャッチし、HPが尽きたら即座に壊れる）
+    // ============================================
     private void CheckHit(GameObject hitObj)
     {
-        if (_isProcessed || _myTankStatus == null) return;
+        if (_isProcessed) return;
 
-        // 弾が当たった場合（味方でも敵でも構わずダメージを受ける）
+        // ★修正: TankStatus.TakeDamage を経由せず、直接箱のHPを減らす
         if (hitObj.CompareTag("Shell"))
         {
             ShellController shell = hitObj.GetComponent<ShellController>();
             if (shell != null)
             {
                 int dmg = shell.shellData != null ? shell.shellData.damage : 10;
-                _myTankStatus.TakeDamage(dmg);
+                _currentBoxHp -= dmg; // 直接HPを減らす
                 shell.TriggerExplosionReaction();
             }
         }
-        // 爆風が当たった場合
         else if (hitObj.CompareTag("Explosion") || hitObj.layer == LayerMask.NameToLayer("Explode"))
         {
-            _myTankStatus.TakeDamage(30);
+            _currentBoxHp -= 30; // 爆風なら固定ダメージで直接減らす
+        }
+
+        if (_currentBoxHp <= 0)
+        {
+            BreakBox();
         }
     }
 }

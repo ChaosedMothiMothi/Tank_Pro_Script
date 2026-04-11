@@ -64,6 +64,18 @@ public class TankStatus : MonoBehaviour
     private ShieldController _activeShield;
     private Rigidbody _rb;
 
+    // ★追加: 爆発シーケンス管理用
+    public bool isBerserkExploding { get; private set; } = false;
+    public float berserkTimer = 8.0f; // 暴走してからの制限時間
+                                      // ★修正: 爆発シーケンス管理用
+    private Renderer[] _berserkRenderers; // 点滅制御用
+
+
+    // ★追加: 暴走時専用の加算速度を保存する変数
+    private float _berserkBonusSpeedVal = 0f;
+
+
+
     private void Start()
     {
         _rb = GetComponent<Rigidbody>();
@@ -111,60 +123,122 @@ public class TankStatus : MonoBehaviour
             _jamTimer -= Time.deltaTime;
             if (_jamTimer <= 0f) IsJammed = false;
         }
+
+        // ★修正: 暴走中のタイマー進行と、全期間を通した明滅処理
+        if (isJammingBerserk && !IsDead)
+        {
+            berserkTimer -= Time.deltaTime;
+
+            if (berserkTimer > 0f)
+            {
+                float blinkSpeed;
+                if (berserkTimer > 1.0f)
+                {
+                    // 残り1秒より前は「遅めの明滅」をずっと続ける
+                    blinkSpeed = 5.0f;
+                }
+                else
+                {
+                    // 残り1秒を切ったら「激しい明滅」に一気に加速する
+                    float progress = 1.0f - berserkTimer;
+                    blinkSpeed = Mathf.Lerp(15.0f, 40.0f, progress);
+                }
+
+                // Time.time を使って途切れない滑らかな明滅を計算
+                float intensity = Mathf.Abs(Mathf.Sin(Time.time * blinkSpeed));
+                Color warningColor = new Color(3.0f, 0.5f, 0.0f); // 地雷と同じオレンジ
+                Color emissionColor = Color.Lerp(Color.black, warningColor, intensity);
+
+                if (_berserkRenderers != null)
+                {
+                    foreach (var r in _berserkRenderers)
+                    {
+                        if (r != null)
+                        {
+                            foreach (var mat in r.materials)
+                            {
+                                if (mat.HasProperty("_EmissionColor")) mat.SetColor("_EmissionColor", emissionColor);
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // 8秒経過でタイムアウト強制自爆
+                CurrentHp = 0;
+                Die();
+            }
+        }
     }
 
-    // ジャミング波に触れた瞬間、砲塔の向きを保存して暴走スタート
-    public void ActivateJammingBerserk(Transform turretTransform)
+    // ジャミング波に触れた瞬間、暴走スタート
+    public void ActivateJammingBerserk(float bonusSpeed)
     {
         if (IsDead || isJammingBerserk) return;
 
         isJammingBerserk = true;
+        berserkTimer = 8.0f;        // 8秒後に自動爆発
+
         IsJammed = false;
         IsInStun = false;
 
-        // ★エラー修正箇所: 一度ローカル変数(dir)に受けてからyを0にして、プロパティに代入する
-        Vector3 dir = Vector3.forward;
-        if (turretTransform != null)
-        {
-            dir = turretTransform.forward;
-        }
-        else
-        {
-            dir = transform.forward;
-        }
+        _berserkBonusSpeedVal = bonusSpeed;
 
-        dir.y = 0; // 上下方向のブレを消す
+        Vector3 dir = Vector3.forward;
+        if (transform != null) dir = transform.forward;
+
+        dir.y = 0;
         berserkDirection = dir.normalized;
 
-        foreach (var r in GetComponentsInChildren<Renderer>())
+        // 突っ込んでくるときにポイントライトを赤色にする
+        foreach (var light in GetComponentsInChildren<Light>())
         {
-            if (r != null) r.material.color = new Color(1f, 0.5f, 0.5f);
+            if (light != null && light.type == LightType.Point)
+            {
+                light.color = Color.red;
+            }
+        }
+
+        // マテリアルのEmissionを準備しておく
+        _berserkRenderers = GetComponentsInChildren<Renderer>();
+        if (_berserkRenderers != null)
+        {
+            foreach (var r in _berserkRenderers)
+            {
+                if (r != null)
+                {
+                    foreach (var mat in r.materials) mat.EnableKeyword("_EMISSION");
+                }
+            }
         }
     }
 
-    // 暴走中は何にぶつかっても即自爆する
+    // ★修正: 暴走中は「敵に触れた瞬間」に即自爆する
     private void OnCollisionEnter(Collision collision)
     {
         if (!isJammingBerserk || IsDead) return;
 
-        if (collision.gameObject.CompareTag("Floor") || collision.gameObject.layer == LayerMask.NameToLayer("Floor")) return;
-
-        CurrentHp = 0;
-        Die();
+        TankStatus otherTank = collision.gameObject.GetComponentInParent<TankStatus>();
+        if (otherTank != null && otherTank.team != this.team && !otherTank.IsDead)
+        {
+            CurrentHp = 0;
+            Die();
+        }
     }
 
+    // トリガー（センサーなど）に触れた場合
     private void OnTriggerEnter(Collider other)
     {
         if (!isJammingBerserk || IsDead) return;
 
-        if (other.gameObject.CompareTag("Floor") || other.gameObject.layer == LayerMask.NameToLayer("Floor")) return;
-
-        if (other.GetComponent<JammingWave>() != null) return;
-
-        CurrentHp = 0;
-        Die();
+        TankStatus otherTank = other.GetComponentInParent<TankStatus>();
+        if (otherTank != null && otherTank.team != this.team && !otherTank.IsDead)
+        {
+            CurrentHp = 0;
+            Die();
+        }
     }
-
     public void ApplyPowerUp(ItemType type)
     {
         switch (type)
@@ -235,20 +309,53 @@ public class TankStatus : MonoBehaviour
         Rigidbody rb = GetComponent<Rigidbody>();
         if (rb != null) { rb.linearVelocity = Vector3.zero; rb.isKinematic = true; }
 
+        // ★追加: 死亡時の自爆前合図として、ポイントライトを赤色にする
+        foreach (var light in GetComponentsInChildren<Light>())
+        {
+            if (light != null && light.type == LightType.Point)
+            {
+                light.color = Color.red;
+            }
+        }
+
         float duration = (tankData != null) ? tankData.selfDestructInterval : 2.0f;
 
+        // すでに暴走特攻で点滅が終わっている場合は一瞬で爆発する
         if (isJammingBerserk) duration = 0.1f;
 
         float timer = 0f;
-        float flashSpeed = 0.1f;
+        Color warningColor = new Color(3.0f, 0.5f, 0.0f); // ★地雷と同じオレンジ色のEmission
         Renderer[] renderers = GetComponentsInChildren<Renderer>();
 
+        // 全マテリアルのEmissionを有効化する
+        foreach (var r in renderers)
+        {
+            if (r != null)
+            {
+                foreach (var mat in r.materials) mat.EnableKeyword("_EMISSION");
+            }
+        }
+
+        // ★地雷と完全に同じ加速点滅アルゴリズム
         while (timer < duration)
         {
-            timer += flashSpeed;
-            Color flashColor = (Mathf.FloorToInt(timer / flashSpeed) % 2 == 0) ? Color.red : Color.white;
-            foreach (var r in renderers) if (r != null) r.material.color = flashColor;
-            yield return new WaitForSeconds(flashSpeed);
+            timer += Time.deltaTime;
+            float progress = timer / duration;
+            float blinkSpeed = Mathf.Lerp(2.0f, 10.0f, progress);
+            float intensity = Mathf.Abs(Mathf.Sin(timer * blinkSpeed));
+            Color emissionColor = Color.Lerp(Color.black, warningColor, intensity);
+
+            foreach (var r in renderers)
+            {
+                if (r != null)
+                {
+                    foreach (var mat in r.materials)
+                    {
+                        if (mat.HasProperty("_EmissionColor")) mat.SetColor("_EmissionColor", emissionColor);
+                    }
+                }
+            }
+            yield return null;
         }
 
         if (tankData != null && tankData.selfDestructDamage > 0 && tankData.selfDestructRadius > 0)
@@ -373,7 +480,15 @@ public class TankStatus : MonoBehaviour
         baseSpeed += bonusMoveSpeed;
         if (_activeShield != null && _activeShield.Data != null) baseSpeed -= _activeShield.Data.speedPenalty;
 
-        if (isBerserkerMode || isJammingBerserk) baseSpeed *= 2.0f;
+        // ★修正: 暴走中は基本速度を2倍にした上で、アンテナ戦車ごとに指定された「ボーナス速度」を丸ごと上乗せする
+        if (isJammingBerserk)
+        {
+            baseSpeed = (baseSpeed * 2.0f) + _berserkBonusSpeedVal;
+        }
+        else if (isBerserkerMode)
+        {
+            baseSpeed *= 2.0f;
+        }
 
         return Mathf.Max(1.0f, baseSpeed);
     }
@@ -416,4 +531,57 @@ public class TankStatus : MonoBehaviour
     public float bonusShellSpeed => buffData != null ? buffData.shellSpeedBonus[Mathf.Min(levelShellSpeed, buffData.shellSpeedBonus.Length - 1)] : levelShellSpeed * 5.0f;
     public int bonusMineLimit => buffData != null ? buffData.mineLimitBonus[Mathf.Min(levelMineLimit, buffData.mineLimitBonus.Length - 1)] : levelMineLimit;
     public float bonusRotationSpeed => buffData != null ? buffData.rotationSpeedBonus[Mathf.Min(levelRotationSpeed, buffData.rotationSpeedBonus.Length - 1)] : levelRotationSpeed * 20.0f;
+
+    // ★追加: 一定時間経過、または敵に近づいたら地雷のように点滅して自爆する処理
+    public void StartBerserkExplosionSequence()
+    {
+        if (isBerserkExploding || IsDead) return;
+        isBerserkExploding = true;
+
+        StartCoroutine(BerserkBlinkAndExplode());
+    }
+
+    private IEnumerator BerserkBlinkAndExplode()
+    {
+        float blinkDuration = 1.0f; // 1秒間点滅する
+        float timer = 0f;
+        Color warningColor = new Color(3.0f, 0.5f, 0.0f); // ★地雷と同じオレンジ色のEmission
+        Renderer[] renderers = GetComponentsInChildren<Renderer>();
+
+        // 全マテリアルのEmissionを有効化する
+        foreach (var r in renderers)
+        {
+            if (r != null)
+            {
+                foreach (var mat in r.materials) mat.EnableKeyword("_EMISSION");
+            }
+        }
+
+        // ★地雷と完全に同じ加速点滅アルゴリズム
+        while (timer < blinkDuration)
+        {
+            timer += Time.deltaTime;
+            float progress = timer / blinkDuration;
+            float blinkSpeed = Mathf.Lerp(2.0f, 10.0f, progress);
+            float intensity = Mathf.Abs(Mathf.Sin(timer * blinkSpeed));
+            Color emissionColor = Color.Lerp(Color.black, warningColor, intensity);
+
+            foreach (var r in renderers)
+            {
+                if (r != null)
+                {
+                    foreach (var mat in r.materials)
+                    {
+                        if (mat.HasProperty("_EmissionColor")) mat.SetColor("_EmissionColor", emissionColor);
+                    }
+                }
+            }
+            yield return null;
+        }
+
+        // 点滅が終わったらHPを0にして強制自爆
+        CurrentHp = 0;
+        Die();
+    }
+
 }

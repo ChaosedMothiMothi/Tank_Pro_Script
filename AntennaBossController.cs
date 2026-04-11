@@ -38,11 +38,17 @@ public class AntennaBossController : MonoBehaviour
     public float jammingExpandSpeed = 15.0f;
     [Tooltip("ジャミングに触れた際に行動不能になる時間（秒）")]
     public float jammingStunDuration = 2.0f;
+
+    // ★追加: 種類ごとに暴走時の「加算する速度」を設定できるようにする（インスペクターで変更可能）
+    [Tooltip("ジャミング波に触れた自爆戦車に【加算】する暴走時の移動速度（例: +20）")]
+    public float berserkBonusSpeed = 5.0f;
+
     [Tooltip("ジャミング波のマテリアル（半透明の黄色などを設定。空欄でも自動生成します）")]
     public Material jammingMaterial;
 
     private Rigidbody _rb;
     private NavMeshAgent _agent;
+    private LineRenderer _lineRenderer; // ★追加: デバッグ射線用
     private TankStatus _currentTarget;
     private Vector3 _moveTarget;
     private float _moveTimer;
@@ -72,6 +78,13 @@ public class AntennaBossController : MonoBehaviour
 
     private void Start()
     {
+        // ★追加: デバッグ射線用のLineRendererセットアップ
+        _lineRenderer = GetComponent<LineRenderer>();
+        if (_lineRenderer == null) _lineRenderer = gameObject.AddComponent<LineRenderer>();
+        _lineRenderer.enabled = false;
+        _lineRenderer.startWidth = 0.1f;
+        _lineRenderer.endWidth = 0.1f;
+
         if (turretTransform != null) _independentTurretRotation = turretTransform.rotation;
         else _independentTurretRotation = transform.rotation;
 
@@ -93,12 +106,14 @@ public class AntennaBossController : MonoBehaviour
         if (tankStatus.IsDead)
         {
             if (!_hasDroppedParts) { _hasDroppedParts = true; DropParts(); }
+            if (_lineRenderer != null) _lineRenderer.enabled = false;
             if (_agent != null && _agent.enabled) _agent.isStopped = true;
             return;
         }
 
         if (GameManager.Instance != null && (!GameManager.Instance.IsGameStarted || GameManager.Instance.IsGameFinished()))
         {
+            if (_lineRenderer != null) _lineRenderer.enabled = false;
             if (_agent != null && _agent.enabled) _agent.isStopped = true;
             return;
         }
@@ -112,6 +127,19 @@ public class AntennaBossController : MonoBehaviour
         HandleTurretAI();
 
         if (!_isActionRigid) ThinkMine();
+
+        // ★追加: アンテナ戦車のデバッグ射線を可視化
+        if (DebugVisualizer.Instance != null && _lineRenderer != null && firePoint != null)
+        {
+            int bounces = 0;
+            if (tankStatus.GetShellPrefab() != null)
+            {
+                var shellCtrl = tankStatus.GetShellPrefab().GetComponent<ShellController>();
+                if (shellCtrl != null && shellCtrl.shellData != null) bounces = shellCtrl.shellData.maxBounces;
+            }
+            bounces += tankStatus.bonusBounces;
+            DebugVisualizer.Instance.DrawTrajectoryLine(_lineRenderer, firePoint.position, firePoint.forward, bounces);
+        }
     }
 
     private void FixedUpdate()
@@ -203,6 +231,9 @@ public class AntennaBossController : MonoBehaviour
         wave.maxRadius = jammingMaxRadius;
         wave.expandSpeed = jammingExpandSpeed;
         wave.stunDuration = jammingStunDuration;
+
+        // ★追加: 暴走時の速度アップ値を波に持たせて伝達する
+        wave.berserkBonusSpeed = this.berserkBonusSpeed;
 
         yield return new WaitForSeconds(0.5f);
         _isActionRigid = false;
@@ -508,6 +539,8 @@ public class AntennaBossController : MonoBehaviour
     private void ThinkMine()
     {
         if (!enemyData.useMine || tankStatus.ActiveMineCount >= tankStatus.GetTotalMineLimit()) return;
+
+        // 近くに既存の地雷やスポナーがあれば置かない（密集防止）
         if (Physics.OverlapSphere(transform.position, enemyData.minePlacementSpacing).Any(c => c.CompareTag("Mine"))) return;
 
         bool shouldPlace = false;
@@ -550,8 +583,29 @@ public class AntennaBossController : MonoBehaviour
                 tankStatus.OnMinePlaced();
             }
         }
-        yield return new WaitForSeconds(tankStatus.GetData().shotDelay);
+
+        // ★修正1: スポーンボックスや地雷を置いたときの硬直時間を、通常の弾(shotDelay)より短くする
+        // ボスは設置後すぐに動けるように 0.3秒 に固定
+        yield return new WaitForSeconds(0.3f);
         _isActionRigid = false;
+
+        // ★修正2: 設置した直後、自分が置いたスポナーに引っかからないように、
+        // 直ちに「現在地から離れた安全なランダム地点」を次の目的地として強制的に上書きする
+        if (_agent != null && _agent.isOnNavMesh)
+        {
+            Vector3 awayDir = (transform.position - _moveTarget).normalized;
+            if (awayDir == Vector3.zero) awayDir = transform.forward;
+
+            // 設置場所から 4m 以上離れた場所を探す
+            Vector3 escapeTarget = transform.position + awayDir * 5.0f + new Vector3(Random.Range(-2f, 2f), 0, Random.Range(-2f, 2f));
+
+            if (NavMesh.SamplePosition(escapeTarget, out NavMeshHit hit, 4.0f, NavMesh.AllAreas))
+            {
+                _moveTarget = hit.position;
+                _agent.SetDestination(_moveTarget);
+                _moveTimer = 0f; // 移動タイマーをリセットして即座に向かわせる
+            }
+        }
     }
 
     private void HandleTurretAI()
@@ -759,6 +813,7 @@ public class JammingWave : MonoBehaviour
     public float maxRadius = 15f;
     public float expandSpeed = 15f;
     public float stunDuration = 2f;
+    public float berserkBonusSpeed = 5.0f; // ★追加: 暴走速度アップ値を受け取る用
     public GameObject ownerObj;
 
     private void Update()
@@ -780,11 +835,8 @@ public class JammingWave : MonoBehaviour
         {
             if (tank.GetData() != null && tank.GetData().isSelfDestruct)
             {
-                // ★修正: 暴走呼び出し時に、敵戦車AIの「砲塔（turretTransform）」を渡して向きを記憶させる
-                EnemyTankController ai = tank.GetComponent<EnemyTankController>();
-                Transform turret = (ai != null) ? ai.turretTransform : tank.transform;
-
-                tank.ActivateJammingBerserk(turret);
+                // ★修正: 波から受け取った「速度アップ値」を戦車に渡す
+                tank.ActivateJammingBerserk(berserkBonusSpeed);
             }
             else
             {

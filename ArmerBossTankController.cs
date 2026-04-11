@@ -95,7 +95,14 @@ public class ArmerBossTankController : MonoBehaviour
             if (_agent.speed < 1.0f) _agent.speed = 3.5f;
 
             _agent.enabled = !isDebugMode;
-            if (_agent.enabled) _agent.Warp(transform.position);
+        }
+
+        // ★修正: ボスは大きくて地面にめり込みやすいため、スポーン時に広範囲で床を探して強制的に地上へ引き上げる
+        if (UnityEngine.AI.NavMesh.SamplePosition(transform.position, out UnityEngine.AI.NavMeshHit navHit, 10.0f, UnityEngine.AI.NavMesh.AllAreas))
+        {
+            // 床の高さから少しだけ上（+0.5f）に浮かせてめり込みを完全に防ぐ
+            transform.position = navHit.position + Vector3.up * 0.5f;
+            if (_agent != null && _agent.enabled) _agent.Warp(transform.position);
         }
 
         DecideNextMoveTarget();
@@ -109,16 +116,19 @@ public class ArmerBossTankController : MonoBehaviour
 
     private void Update()
     {
-        // ★修正: ゲーム開始前、または終了時は何もしない
+        // ★修正: GameManagerのチェックやIsDeadの時に、NavMeshに乗っている(isOnNavMesh)時だけisStoppedを触るようにする
         if (tankStatus.IsDead || (GameManager.Instance != null && (!GameManager.Instance.IsGameStarted || GameManager.Instance.IsGameFinished())))
         {
             if (_lineRenderer != null) _lineRenderer.enabled = false;
-            if (_agent != null && _agent.enabled) _agent.isStopped = true;
+
+            // isOnNavMesh を追加してエラーを回避
+            if (_agent != null && _agent.enabled && _agent.isOnNavMesh) _agent.isStopped = true;
             return;
         }
         else
         {
-            if (_agent != null && _agent.enabled && _agent.isStopped) _agent.isStopped = false;
+            // ここも isOnNavMesh を追加
+            if (_agent != null && _agent.enabled && _agent.isOnNavMesh && _agent.isStopped) _agent.isStopped = false;
         }
 
         // モード切替監視
@@ -126,14 +136,15 @@ public class ArmerBossTankController : MonoBehaviour
         {
             if (isDebugMode)
             {
-                if (_agent != null) { _agent.isStopped = true; _agent.enabled = false; }
+                if (_agent != null && _agent.isOnNavMesh) { _agent.isStopped = true; _agent.enabled = false; }
                 _rb.isKinematic = false;
                 _isActionBusy = false;
                 _isActionRigid = false;
             }
             else
             {
-                if (_agent != null) { _agent.enabled = true; _agent.Warp(transform.position); _agent.isStopped = false; }
+                if (_agent != null) { _agent.enabled = true; _agent.Warp(transform.position); }
+                if (_agent != null && _agent.isOnNavMesh) _agent.isStopped = false;
                 DecideNextMoveTarget();
             }
             _lastDebugMode = isDebugMode;
@@ -170,21 +181,16 @@ public class ArmerBossTankController : MonoBehaviour
 
     private void FixedUpdate()
     {
-        if (_rb == null || _rb.isKinematic) return;
-        if (tankStatus.IsInStun) { _rb.linearVelocity = new Vector3(0, _rb.linearVelocity.y, 0); return; }
-
-        // ★追加: カウントダウン中は物理的な移動力も一切加えない
+        if (_rb == null || _rb.isKinematic || tankStatus.IsInStun) return;
         if (GameManager.Instance != null && (!GameManager.Instance.IsGameStarted || GameManager.Instance.IsGameFinished())) return;
 
-        if (isDebugMode)
+        if (_isActionRigid)
         {
-            //ExecuteDebugMovement();
+            StopMovementImmediate();
+            return;
         }
-        else
-        {
-            if (_isActionRigid) { StopMovementImmediate(); return; }
-            ExecuteMovement();
-        }
+
+        ExecuteMovement();
     }
 
     // --- デバッグ操作 (New Input System 対応) ---
@@ -264,9 +270,23 @@ public class ArmerBossTankController : MonoBehaviour
 
         Vector3 desiredVel = _agent.desiredVelocity;
 
+        // ★修正: NavMeshが立ち止まりかけている時（角や狭い場所など）は、強制的に前進させてスタックを防ぐ
         if (desiredVel.magnitude < 0.1f)
         {
             desiredVel = transform.forward * tankStatus.GetCurrentMoveSpeed();
+
+            // それでも動かないような完全スタック状態なら、目的地を強制的に再計算する
+            _stuckTimer += Time.deltaTime;
+            if (_stuckTimer > 1.5f)
+            {
+                DecideNextMoveTarget();
+                if (_agent.isOnNavMesh) _agent.SetDestination(_moveTarget);
+                _stuckTimer = 0f;
+            }
+        }
+        else
+        {
+            _stuckTimer = 0f;
         }
 
         // 1. 危険回避（弾・地雷）
@@ -296,7 +316,7 @@ public class ArmerBossTankController : MonoBehaviour
             desiredVel = (desiredVel.normalized + avoidanceForce.normalized * 2.0f).normalized * tankStatus.GetCurrentMoveSpeed();
         }
 
-        // 3. ★究極のめり込み・スタック防止（球体スライダー）
+        // 3. 究極のめり込み・スタック防止（球体スライダー）
         Vector3 checkDir = desiredVel.magnitude > 0.1f ? desiredVel.normalized : transform.forward;
         float bossRadius = 0.6f;
 
@@ -346,7 +366,7 @@ public class ArmerBossTankController : MonoBehaviour
             StopMovementImmediate();
         }
 
-        _agent.nextPosition = _rb.position;
+        if (_agent.isOnNavMesh) _agent.nextPosition = _rb.position;
     }
 
     // --- AI移動 (NavMesh) ---
@@ -634,15 +654,53 @@ public class ArmerBossTankController : MonoBehaviour
 
     private IEnumerator MineRoutine()
     {
-        GameObject prefabToUse = tankStatus.GetMinePrefab();
+        _isActionRigid = true; // ★硬直開始（移動と砲塔回転が一切止まる）
+        GameObject prefabToUse = minePrefab != null ? minePrefab : tankStatus.GetMinePrefab();
+
         if (prefabToUse != null)
         {
             GameObject mineObj = Instantiate(prefabToUse, transform.position, Quaternion.identity);
-            MineController mineCtrl = mineObj.GetComponent<MineController>();
-            if (mineCtrl != null) { mineCtrl.Init(tankStatus, tankStatus.GetMineData()); tankStatus.OnMinePlaced(); }
-            else { RobotBombController robotBomb = mineObj.GetComponent<RobotBombController>(); if (robotBomb != null) { robotBomb.Init(tankStatus, tankStatus.GetMineData()); tankStatus.OnMinePlaced(); } }
+            if (mineObj.TryGetComponent(out MineController mineCtrl))
+            {
+                mineCtrl.Init(tankStatus, tankStatus.GetMineData());
+                tankStatus.OnMinePlaced();
+            }
+            else if (mineObj.TryGetComponent(out RobotBombController robotBomb))
+            {
+                robotBomb.Init(tankStatus, tankStatus.GetMineData());
+                tankStatus.OnMinePlaced();
+            }
+            else if (mineObj.TryGetComponent(out TankSpawnerBox spawnerBox))
+            {
+                spawnerBox.Init(tankStatus, tankStatus.team);
+                tankStatus.OnMinePlaced();
+            }
         }
-        yield return null;
+
+        // 硬直時間を待つ（0.3秒で素早く動けるようにする）
+        yield return new WaitForSeconds(0.3f);
+
+        // ★硬直が完全に終わってから、次の逃げ先を決定する
+        if (_agent != null && _agent.isOnNavMesh)
+        {
+            // 自分が向いている方向とは反対側（後ろ）に逃げる基準を作る
+            Vector3 awayDir = -transform.forward;
+
+            // 現在地から4mほど離れた安全なランダム地点を探す
+            Vector3 escapeTarget = transform.position + awayDir * 5.0f + new Vector3(Random.Range(-2f, 2f), 0, Random.Range(-2f, 2f));
+
+            if (NavMesh.SamplePosition(escapeTarget, out NavMeshHit hit, 4.0f, NavMesh.AllAreas))
+            {
+                _moveTarget = hit.position;
+                _agent.SetDestination(_moveTarget);
+                _moveTimer = 0f; // 即座に更新させる
+
+                // 次のフレームからExecuteMovement()が呼ばれ、
+                // 車体を escapeTarget の方向へ向けてから走り出すようになる
+            }
+        }
+
+        _isActionRigid = false; // ★硬直解除（ここから移動再開）
     }
 
     [Tooltip("扇状に広がりながら跳弾ルートをスキャンする（ボスの究極エイム）")]

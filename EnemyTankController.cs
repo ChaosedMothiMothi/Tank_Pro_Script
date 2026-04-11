@@ -103,15 +103,9 @@ public class EnemyTankController : MonoBehaviour
 
     private void Update()
     {
-        // ★修正: 死亡時に1回だけパーツをばらまく
         if (tankStatus.IsDead)
         {
-            if (!_hasDroppedParts)
-            {
-                _hasDroppedParts = true;
-                DropParts();
-            }
-
+            if (!_hasDroppedParts) { _hasDroppedParts = true; DropParts(); }
             if (_lineRenderer != null) _lineRenderer.enabled = false;
             if (_agent != null && _agent.enabled) _agent.isStopped = true;
             return;
@@ -126,18 +120,43 @@ public class EnemyTankController : MonoBehaviour
 
         if (_fireCooldownTimer > 0) _fireCooldownTimer -= Time.deltaTime;
 
-        // 硬直中も思考（ターゲット選定・砲塔制御）は続ける
+        // ============================================
+        // ★修正: 暴走モード中の専用思考
+        // ============================================
+        if (tankStatus.isJammingBerserk)
+        {
+            ThinkTarget(); // ターゲット（敵）は探し続ける
+
+            // ★修正: 砲塔は常に狙っている敵を睨み続ける
+            if (turretTransform != null)
+            {
+                if (_currentTarget != null && !_currentTarget.IsDead)
+                {
+                    Vector3 aimDir = (_currentTarget.transform.position - turretTransform.position).normalized;
+                    aimDir.y = 0;
+                    if (aimDir != Vector3.zero)
+                    {
+                        // 通常時と同じ旋回速度で滑らかに敵を追従する
+                        _independentTurretRotation = Quaternion.RotateTowards(_independentTurretRotation, Quaternion.LookRotation(aimDir), enemyData.turretRotationSpeed * Time.deltaTime);
+                    }
+                }
+                else
+                {
+                    // 敵を見失った場合は正面を向く
+                    _independentTurretRotation = transform.rotation;
+                }
+            }
+
+            return; // 暴走中は通常の思考（弾避けや地雷設置など）を行わない
+        }
+        // ============================================
+
         ThinkTarget();
         ThinkMoveLogic();
         HandleTurretAI();
 
-        // 地雷設置（硬直中は不可）
-        if (!_isActionRigid)
-        {
-            ThinkMine();
-        }
+        if (!_isActionRigid) ThinkMine();
 
-        // デバッグ表示（省略せず元のまま残す）
         if (DebugVisualizer.Instance != null && _lineRenderer != null && firePoint != null)
         {
             int bounces = 0;
@@ -153,10 +172,9 @@ public class EnemyTankController : MonoBehaviour
 
     private void FixedUpdate()
     {
-        if (_rb == null || _rb.isKinematic || tankStatus.IsInStun) return;
+        if (_rb == null || _rb.isKinematic) return;
         if (GameManager.Instance != null && (!GameManager.Instance.IsGameStarted || GameManager.Instance.IsGameFinished())) return;
 
-        // ★追加: スポーンボックスから浮いて生成された際に、AI（NavMesh）が宙に取り残されないように再接続する
         if (_agent != null && !_agent.isOnNavMesh)
         {
             if (UnityEngine.AI.NavMesh.SamplePosition(_rb.position, out UnityEngine.AI.NavMeshHit hit, 2.0f, UnityEngine.AI.NavMesh.AllAreas))
@@ -165,21 +183,21 @@ public class EnemyTankController : MonoBehaviour
             }
         }
 
-        if (_isActionRigid)
+        // ★修正: 暴走モード中は、スタン(IsInStun)や硬直(_isActionRigid)を一切無視して強制的に動かす
+        if (tankStatus.isJammingBerserk)
+        {
+            ExecuteBerserkMovement();
+            return; // 暴走中ならここで終わり。これより下の「硬直で止める」処理は実行されない
+        }
+
+        // --- 以下は通常モード用の処理 ---
+        if (_isActionRigid || tankStatus.IsInStun)
         {
             StopMovementImmediate();
             return;
         }
 
-        // ★追加: 暴走モードか通常モードかで「完全に別の関数」を呼ぶように分離
-        if (tankStatus.isJammingBerserk)
-        {
-            ExecuteBerserkMovement();
-        }
-        else
-        {
-            ExecuteMovement();
-        }
+        ExecuteMovement();
     }
 
     private void LateUpdate()
@@ -429,7 +447,14 @@ public class EnemyTankController : MonoBehaviour
         }
 
         Vector3 baseDir = _agent.desiredVelocity;
-        if (enemyData.aiType != EnemyData.AIType.Neat && baseDir.magnitude < 0.1f) baseDir = transform.forward * tankStatus.GetCurrentMoveSpeed();
+
+        // ニート以外で目標方向がない場合はとりあえず前進
+        if (enemyData.aiType != EnemyData.AIType.Neat && baseDir.magnitude < 0.1f)
+        {
+            baseDir = transform.forward * tankStatus.GetCurrentMoveSpeed();
+        }
+
+        // バカ特有の蛇行運転
         if (enemyData.aiType != EnemyData.AIType.Neat && baseDir.magnitude > 0.1f)
         {
             float wobbleSpeed = (enemyData.aiType == EnemyData.AIType.Idiot) ? 3f : 1.5f;
@@ -439,6 +464,7 @@ public class EnemyTankController : MonoBehaviour
 
         Vector3 finalDir = baseDir.normalized;
 
+        // --- 回避処理 ---
         Vector3 tankAvoid = GetAvoidanceVector("Tank");
         if (tankAvoid != Vector3.zero) finalDir = (finalDir + tankAvoid * 5.0f).normalized;
 
@@ -450,6 +476,7 @@ public class EnemyTankController : MonoBehaviour
 
         if (finalDir.magnitude < 0.1f) finalDir = transform.forward;
 
+        // 壁滑り処理
         int obstacleMask = LayerMask.GetMask("Wall", "Spike");
         if (Physics.SphereCast(transform.position + Vector3.up * 0.5f, 0.5f, finalDir, out RaycastHit sphereHit, 1.2f, obstacleMask))
         {
@@ -461,6 +488,7 @@ public class EnemyTankController : MonoBehaviour
         if (finalDir != Vector3.zero) _smoothedMoveDir = Vector3.Lerp(_smoothedMoveDir, finalDir, Time.fixedDeltaTime * 6.0f).normalized;
         if (_smoothedMoveDir == Vector3.zero) _smoothedMoveDir = transform.forward;
 
+        // 実際の移動処理
         if (_smoothedMoveDir.magnitude > 0.1f && enemyData.aiType != EnemyData.AIType.Neat)
         {
             float targetAngle = Mathf.Atan2(_smoothedMoveDir.x, _smoothedMoveDir.z) * Mathf.Rad2Deg;
@@ -468,39 +496,90 @@ public class EnemyTankController : MonoBehaviour
             float nextAngle = Mathf.MoveTowardsAngle(currentY, targetAngle, tankStatus.GetCurrentRotationSpeed() * Time.fixedDeltaTime);
             _rb.MoveRotation(Quaternion.Euler(0, nextAngle, 0));
 
-            if (Mathf.Abs(Mathf.DeltaAngle(currentY, targetAngle)) > 45.0f) _rb.linearVelocity = new Vector3(0, _rb.linearVelocity.y, 0);
+            // 車体が目標方向を向いていない（45度以上ズレている）時は、進まずにその場で旋回だけする
+            if (Mathf.Abs(Mathf.DeltaAngle(currentY, targetAngle)) > 45.0f)
+            {
+                _rb.linearVelocity = new Vector3(0, _rb.linearVelocity.y, 0);
+            }
             else
             {
+                // ★修正: ちゃんと正面（transform.forward）に向かって速度を出して進ませる
                 Vector3 vel = transform.forward * tankStatus.GetCurrentMoveSpeed();
                 _rb.linearVelocity = new Vector3(vel.x, _rb.linearVelocity.y, vel.z);
             }
         }
-        else StopMovementImmediate();
+        else
+        {
+            StopMovementImmediate();
+        }
 
         if (_agent != null && _agent.isOnNavMesh) _agent.nextPosition = _rb.position;
     }
 
-    [Tooltip("暴走モード（ジャミング特攻）中の専用移動処理：曲がらずに一直線で突撃する")]
+    [Tooltip("暴走モード（ジャミング特攻）中の専用移動処理：NavMeshと壁滑りを組み合わせて絶対にスタックせず敵を追う")]
     private void ExecuteBerserkMovement()
     {
-        // NavMesh（AIの経路探索）の干渉を完全に切る
         if (_agent != null && _agent.isOnNavMesh)
         {
-            _agent.isStopped = true;
+            _agent.isStopped = false;
+
+            // ターゲットがいれば、常にその位置を目的地に設定
+            if (_currentTarget != null && !_currentTarget.IsDead)
+            {
+                // 計算パンクを防ぐため、目的地が1m以上ズレた時だけ更新する
+                if (Vector3.Distance(_agent.destination, _currentTarget.transform.position) > 1.0f)
+                {
+                    _agent.SetDestination(_currentTarget.transform.position);
+                }
+            }
+
+            // 基本的な進行方向はNavMeshの「次に曲がるべき角」
+            Vector3 desiredDir = _agent.steeringTarget - transform.position;
+            desiredDir.y = 0;
+
+            // 経路計算がまだ出ていない時の一瞬の保険（立ち止まり防止）
+            if (desiredDir.magnitude < 0.1f && _currentTarget != null && !_currentTarget.IsDead)
+            {
+                desiredDir = (_currentTarget.transform.position - transform.position);
+                desiredDir.y = 0;
+            }
+
+            if (desiredDir.magnitude > 0.1f)
+            {
+                desiredDir.Normalize();
+
+                // ★追加: 壁の角などに引っかからないよう、物理的な「壁滑り・押し出し」を適用する
+                Vector3 wallAvoid = GetWallAvoidanceVector(3.0f); // 暴走中は少し短めの距離で検知
+                if (wallAvoid != Vector3.zero)
+                {
+                    desiredDir = (desiredDir * 0.4f + wallAvoid * 5.0f).normalized;
+                }
+
+                int obstacleMask = LayerMask.GetMask("Wall", "Spike");
+                if (Physics.SphereCast(transform.position + Vector3.up * 0.5f, 0.5f, desiredDir, out RaycastHit sphereHit, 1.2f, obstacleMask))
+                {
+                    Vector3 wallNormal = sphereHit.normal; wallNormal.y = 0;
+                    Vector3 slideDir = Vector3.ProjectOnPlane(desiredDir, wallNormal);
+                    desiredDir = (slideDir.magnitude > 0.1f) ? slideDir.normalized : wallNormal.normalized;
+                }
+
+                // 滑らかに目標の方向へ車体を回転させる
+                float targetAngle = Mathf.Atan2(desiredDir.x, desiredDir.z) * Mathf.Rad2Deg;
+                float currentY = _rb.rotation.eulerAngles.y;
+                float nextAngle = Mathf.MoveTowardsAngle(currentY, targetAngle, tankStatus.GetCurrentRotationSpeed() * Time.fixedDeltaTime);
+                _rb.MoveRotation(Quaternion.Euler(0, nextAngle, 0));
+
+                // 向いた方向へ前進（速度はTankStatus側でアップ済み）
+                Vector3 vel = transform.forward * tankStatus.GetCurrentMoveSpeed();
+                _rb.linearVelocity = new Vector3(vel.x, _rb.linearVelocity.y, vel.z);
+            }
+            else
+            {
+                _rb.linearVelocity = new Vector3(0, _rb.linearVelocity.y, 0);
+            }
+
+            _agent.nextPosition = _rb.position;
         }
-
-        // TankStatusに保存された「ジャミングを受けた瞬間に砲塔が向いていた方向」を取得
-        Vector3 dashDir = tankStatus.berserkDirection;
-
-        // 車体の向き（見た目）を、突撃方向に一瞬で合わせる
-        _rb.MoveRotation(Quaternion.LookRotation(dashDir));
-
-        // 速度2倍で、一切曲がることなく一直線に突っ込む（ロケット突撃）
-        Vector3 vel = dashDir * tankStatus.GetCurrentMoveSpeed();
-        _rb.linearVelocity = new Vector3(vel.x, _rb.linearVelocity.y, vel.z);
-
-        // 実際の物理座標をNavMeshエージェントに上書きしてズレを防ぐ
-        if (_agent != null) _agent.nextPosition = _rb.position;
     }
 
     // --- 回避ベクトル計算用のヘルパー関数 ---
@@ -765,7 +844,10 @@ public class EnemyTankController : MonoBehaviour
             turretTransform.rotation = _independentTurretRotation;
         }
 
-        // 射撃試行（LateUpdateで実行）
+        // ★追加: 暴走中は弾を撃たないようにここで処理を止める
+        if (tankStatus.isJammingBerserk) return;
+
+        // 射撃試行
         if (CheckShootTrajectory())
         {
             TryFire();
@@ -841,6 +923,12 @@ public class EnemyTankController : MonoBehaviour
         // ターゲットが生きていれば、戦略に応じて維持判定
         if (_currentTarget != null && !_currentTarget.IsDead)
         {
+            // ★追加: 暴走中（ジャミング特攻中）は、一度決めたターゲットを死ぬまで絶対に！変えない
+            if (tankStatus.isJammingBerserk)
+            {
+                return;
+            }
+
             if (enemyData.targetStrategy == EnemyData.TargetStrategy.Persistent)
             {
                 return; // 執着：死ぬまで変えない
@@ -854,7 +942,9 @@ public class EnemyTankController : MonoBehaviour
 
         // 新規検索（距離優先）
         var targets = FindObjectsByType<TankStatus>(FindObjectsSortMode.None)
-            .Where(t => t.team != tankStatus.team && !t.IsDead)
+            // ★修正: ターゲットに選ぶ条件に「チームが自分と違うこと」を厳密に指定
+            // スポーンボックスで生まれた戦車が、親（同じチーム）を誤認しないようにする
+            .Where(t => t != null && t.team != tankStatus.team && !t.IsDead)
             .OrderBy(t => Vector3.Distance(transform.position, t.transform.position))
             .ToList();
 
