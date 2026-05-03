@@ -23,7 +23,9 @@ public class GameManager : MonoBehaviour
     [Header("UI References")]
     [SerializeField] private ResultUIManager resultUIManager;
     [SerializeField] private TMPro.TextMeshProUGUI startText;
-    [SerializeField] private TMPro.TextMeshProUGUI partsText;
+
+    // ★修正: 元々あったパーツ専用のテキスト(partsText)を削除しました。
+    // 代わりに下の「simpleModeStatusText」1つだけで残機とパーツ数を両方表示させます。
 
     [Header("Drop Settings")]
     public GameObject defaultPartsItemPrefab;
@@ -35,6 +37,13 @@ public class GameManager : MonoBehaviour
 
     private List<TankStatus> _allTanks = new List<TankStatus>();
     private TankStatus _playerTank;
+
+    // フェード用の画像参照変数
+    private UnityEngine.UI.Image _fadeImage;
+
+    [Header("Simple Mode UI Settings")]
+    [Tooltip("シンプルモード用の「残機・パーツ数」を表示するテキストUIをアタッチしてください")]
+    public TMPro.TextMeshProUGUI simpleModeStatusText;
 
     private void Awake()
     {
@@ -53,14 +62,20 @@ public class GameManager : MonoBehaviour
         IsGameStarted = false;
         _allTanks.Clear();
 
-        UpdatePartsText();
-
         foreach (var tank in FindObjectsByType<TankStatus>(FindObjectsSortMode.None))
         {
             RegisterTank(tank);
         }
 
+        // フェードインとゲーム開始カウントダウン
+        StartCoroutine(FadeInRoutine());
         StartCoroutine(GameStartRoutine());
+
+        // アタッチされたUIのテキストを初回更新する
+        if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.isSimpleMode)
+        {
+            UpdateSimpleModeUI();
+        }
     }
 
     private IEnumerator GameStartRoutine()
@@ -78,7 +93,7 @@ public class GameManager : MonoBehaviour
             yield break;
         }
 
-        // ★追加・修正: プレイヤーが生成されるのを少しだけ待つ（動的スポーン対策）
+        // プレイヤーが生成されるのを少しだけ待つ
         float waitTimer = 0f;
         while (_playerTank == null && waitTimer < 1.0f)
         {
@@ -95,7 +110,6 @@ public class GameManager : MonoBehaviour
             yield return null;
         }
 
-        // ★修正: TextMeshProを使って、確実に綺麗に表示する
         GameObject playerIndicator = null;
         if (_playerTank != null)
         {
@@ -110,7 +124,6 @@ public class GameManager : MonoBehaviour
             tmpro.alignment = TMPro.TextAlignmentOptions.Center;
             tmpro.fontStyle = TMPro.FontStyles.Bold;
 
-            // アニメーションを開始
             StartCoroutine(AnimateIndicatorRoutine(playerIndicator));
         }
 
@@ -125,7 +138,6 @@ public class GameManager : MonoBehaviour
             yield return new WaitForSeconds(0.7f);
             startText.text = "START!";
 
-            // ゲーム開始と同時にインジケーターを消す
             if (playerIndicator != null) Destroy(playerIndicator);
 
             IsGameStarted = true;
@@ -170,28 +182,37 @@ public class GameManager : MonoBehaviour
     {
         if (IsFinished) return;
 
-        if (deadTank.team == TeamType.Blue)
+        // ★修正: deadTank が _playerTank かつ team == Blue の場合のみ敗北
+        if (deadTank == _playerTank && deadTank.team == TeamType.Blue)
         {
             FinishGame(false);
+            return;
         }
-        else if (deadTank.team == TeamType.Red)
+
+        // 赤チームの敵が倒された場合
+        if (deadTank.team == TeamType.Red)
         {
-            bool hasBoss = false;
-            bool bossAlive = false;
+            bool hasBossOrCaptain = false;
+            bool bossOrCaptainAlive = false;
             int redCount = 0;
 
             foreach (var t in _allTanks)
             {
                 if (t != null && t.team == TeamType.Red)
                 {
-                    if (t.isBoss) { hasBoss = true; if (!t.IsDead) bossAlive = true; }
+                    if (t.isBoss || t.isCaptain)
+                    {
+                        hasBossOrCaptain = true;
+                        if (!t.IsDead) bossOrCaptainAlive = true;
+                    }
+
                     if (!t.IsDead) redCount++;
                 }
             }
 
-            if (hasBoss)
+            if (hasBossOrCaptain)
             {
-                if (!bossAlive) FinishGame(true);
+                if (!bossOrCaptainAlive) FinishGame(true);
             }
             else
             {
@@ -221,8 +242,15 @@ public class GameManager : MonoBehaviour
             {
                 GlobalGameManager.Instance.playerLives--;
             }
+
+            if (isWin)
+            {
+                StartCoroutine(AutoNextStageRoutine());
+                return;
+            }
         }
 
+        // シンプルモードの敗北時や、通常モードの場合はリザルト画面を表示
         if (resultUIManager != null) resultUIManager.ShowResult(isWin);
     }
 
@@ -236,7 +264,7 @@ public class GameManager : MonoBehaviour
         {
             GlobalGameManager.Instance.savedParts = CurrentParts;
         }
-        UpdatePartsText();
+        UpdateSimpleModeUI();
     }
 
     public bool ConsumeParts(int amount)
@@ -248,15 +276,10 @@ public class GameManager : MonoBehaviour
             {
                 GlobalGameManager.Instance.savedParts = CurrentParts;
             }
-            UpdatePartsText();
+            UpdateSimpleModeUI();
             return true;
         }
         return false;
-    }
-
-    private void UpdatePartsText()
-    {
-        if (partsText != null) partsText.text = $"Parts: {CurrentParts}";
     }
 
     public void RetryGame()
@@ -269,5 +292,116 @@ public class GameManager : MonoBehaviour
     {
         Time.timeScale = 1f;
         SceneManager.LoadScene(0);
+    }
+
+    // ==========================================
+    // フェードイン・アウト＆自動画面遷移
+    // ==========================================
+    private IEnumerator AutoNextStageRoutine()
+    {
+        if (startText != null)
+        {
+            startText.gameObject.SetActive(true);
+            startText.text = "STAGE CLEAR!";
+            startText.color = Color.yellow;
+        }
+
+        yield return new WaitForSeconds(2.5f);
+        yield return StartCoroutine(FadeOutRoutine());
+
+        if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.HasNextStage())
+        {
+            GlobalGameManager.Instance.GoToNextStage();
+            SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+        }
+        else
+        {
+            if (!string.IsNullOrEmpty(nextSceneName))
+            {
+                SceneManager.LoadScene(nextSceneName);
+            }
+            else
+            {
+                SceneManager.LoadScene(0);
+            }
+        }
+    }
+
+    private void SetupFadeCanvas()
+    {
+        if (_fadeImage != null) return;
+
+        GameObject canvasObj = new GameObject("FadeCanvas");
+        Canvas canvas = canvasObj.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 999;
+
+        GameObject imageObj = new GameObject("FadeImage");
+        imageObj.transform.SetParent(canvasObj.transform, false);
+        _fadeImage = imageObj.AddComponent<UnityEngine.UI.Image>();
+        _fadeImage.color = Color.black;
+
+        RectTransform rt = _fadeImage.GetComponent<RectTransform>();
+        rt.anchorMin = Vector2.zero;
+        rt.anchorMax = Vector2.one;
+        rt.sizeDelta = Vector2.zero;
+    }
+
+    private IEnumerator FadeInRoutine()
+    {
+        SetupFadeCanvas();
+        _fadeImage.color = new Color(0, 0, 0, 1f);
+        _fadeImage.raycastTarget = true;
+
+        float duration = 0.5f;
+        float elapsed = 0f;
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            _fadeImage.color = new Color(0, 0, 0, 1.0f - (elapsed / duration));
+            yield return null;
+        }
+        _fadeImage.raycastTarget = false;
+    }
+
+    private IEnumerator FadeOutRoutine()
+    {
+        SetupFadeCanvas();
+        _fadeImage.gameObject.SetActive(true);
+        _fadeImage.raycastTarget = true;
+
+        float duration = 0.5f;
+        float elapsed = 0f;
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            _fadeImage.color = new Color(0, 0, 0, elapsed / duration);
+            yield return null;
+        }
+    }
+
+    // ==========================================
+    // UI更新処理
+    // ==========================================
+    private void UpdateSimpleModeUI()
+    {
+        if (GlobalGameManager.Instance == null) return;
+
+        if (simpleModeStatusText != null)
+        {
+            simpleModeStatusText.text = $"LIVES: {GlobalGameManager.Instance.playerLives}\nPARTS: {CurrentParts}";
+        }
+    }
+
+    // ==========================================
+    // プレイヤーの残機を増やす
+    // ==========================================
+    public void AddPlayerLife()
+    {
+        if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.isSimpleMode)
+        {
+            GlobalGameManager.Instance.playerLives++;
+            UpdateSimpleModeUI();
+        }
     }
 }

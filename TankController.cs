@@ -14,13 +14,14 @@ public class TankController : MonoBehaviour
     [Tooltip("地雷を設置する位置のZ軸のズレ（マイナスで戦車の後方、0で戦車の中心）")]
     [SerializeField] private float mineSpawnOffsetZ = 2f;
 
+    private Vector2 _mouseAimInput;
+
     private Rigidbody _rb;
     private Vector2 _moveInput;
-    private Vector2 _aimInput;
-    private bool _isUsingGamepad;
     private int _currentAmmoCount;
     private float _targetAngle;
     private bool _isReverse;
+
 
     private void Awake()
     {
@@ -41,11 +42,17 @@ public class TankController : MonoBehaviour
         if (_moveInput.sqrMagnitude > 0.01f) UpdateTargetDirection();
     }
 
+    // ==========================================
+    // ★修正: マウスとコントローラーの入力を明確に切り分ける
+    // ==========================================
     public void OnAim(InputAction.CallbackContext context)
     {
-        if (!IsGameActive) { _aimInput = Vector2.zero; return; }
-        _aimInput = context.ReadValue<Vector2>();
-        _isUsingGamepad = context.control.device is not Pointer;
+        if (!IsGameActive) return;
+
+        if (context.control.device is Pointer)
+        {
+            _mouseAimInput = context.ReadValue<Vector2>();
+        }
     }
 
     public void OnFire(InputAction.CallbackContext context)
@@ -100,26 +107,69 @@ public class TankController : MonoBehaviour
         }
     }
 
+    // ==========================================
+    // ★修正: コントローラーの右スティックの傾きに応じて砲塔を回す
+    // ==========================================
     private void HandleTurretRotation()
     {
         if (turretTransform == null) return;
         Vector3 targetDirection = Vector3.zero;
-        if (_isUsingGamepad) { if (_aimInput.sqrMagnitude > 0.1f) targetDirection = new Vector3(_aimInput.x, 0, _aimInput.y); }
-        else
+        bool isPadInput = false;
+
+        // 1. 【最優先】ゲームパッドの右スティックの入力を直接チェックする
+        if (Gamepad.current != null)
         {
-            Ray ray = Camera.main.ScreenPointToRay(_aimInput);
-            Plane groundPlane = new Plane(Vector3.up, turretTransform.position);
-            if (groundPlane.Raycast(ray, out float distance)) targetDirection = ray.GetPoint(distance) - turretTransform.position;
+            Vector2 rightStick = Gamepad.current.rightStick.ReadValue();
+
+            // スティックが少しでも倒されていれば、その方向ベクトルを採用
+            if (rightStick.sqrMagnitude > 0.05f)
+            {
+                targetDirection = new Vector3(rightStick.x, 0, rightStick.y);
+                isPadInput = true;
+            }
         }
-        if (targetDirection != Vector3.zero) { targetDirection.y = 0; turretTransform.rotation = Quaternion.LookRotation(targetDirection); }
+
+        // 2. コントローラーの入力がない場合のみ、マウスのカーソル位置へ向く
+        if (!isPadInput)
+        {
+            Ray ray = Camera.main.ScreenPointToRay(_mouseAimInput);
+            Plane groundPlane = new Plane(Vector3.up, turretTransform.position);
+            if (groundPlane.Raycast(ray, out float distance))
+            {
+                targetDirection = ray.GetPoint(distance) - turretTransform.position;
+            }
+        }
+
+        // 方向が定まっていれば砲塔を回転させる
+        if (targetDirection != Vector3.zero)
+        {
+            targetDirection.y = 0;
+            turretTransform.rotation = Quaternion.Slerp(turretTransform.rotation, Quaternion.LookRotation(targetDirection), Time.deltaTime * 25f);
+        }
     }
 
+    // ==========================================
+    // ★修正: 前進・後退の角度がほぼ同じ（真横）の場合は、前進を優先する
+    // ==========================================
     private void UpdateTargetDirection()
     {
         float inputAngle = Mathf.Atan2(_moveInput.x, _moveInput.y) * Mathf.Rad2Deg;
         float angleDiff = Mathf.DeltaAngle(transform.eulerAngles.y, inputAngle);
-        if (Mathf.Abs(angleDiff) > 90f) { _targetAngle = Mathf.Repeat(inputAngle + 180f, 360f); _isReverse = true; }
-        else { _targetAngle = inputAngle; _isReverse = false; }
+        float absDiff = Mathf.Abs(angleDiff);
+
+        // 真横（90度）付近の場合、同数値なら「前方(false)」を向くように閾値を91度など少し広めに取る
+        if (absDiff > 95f)
+        {
+            // 完全に後ろ側（95度以上）を向く指示なら後退
+            _targetAngle = Mathf.Repeat(inputAngle + 180f, 360f);
+            _isReverse = true;
+        }
+        else
+        {
+            // 前方〜真横（95度以下）なら前進
+            _targetAngle = inputAngle;
+            _isReverse = false;
+        }
     }
 
     private void HandleMovement()

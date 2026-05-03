@@ -20,12 +20,23 @@ public class HPBarManager : MonoBehaviour
         if (bossHPBar != null) bossHPBar.gameObject.SetActive(false);
     }
 
+    // ==========================================
+    // ★修正: プレハブ名ではなく、ScriptableObjectの「tankName」を使う
+    // ==========================================
     public void RegisterTank(TankStatus tank)
     {
+        // TankStatusData (ScriptableObject) から正式な名前を取得する。
+        // もしデータがない、または名前が未設定ならプレハブ名をフォールバックとして使う。
+        string displayName = tank.name;
+        if (tank.GetData() != null && !string.IsNullOrEmpty(tank.GetData().tankName))
+        {
+            displayName = tank.GetData().tankName;
+        }
+
         if (tank.isBoss && bossHPBar != null)
         {
             bossHPBar.gameObject.SetActive(true);
-            bossHPBar.Init(tank.name, tank.GetData().maxHp, null);
+            bossHPBar.Init(displayName, tank.GetData().maxHp, null);
             _activeBars[tank] = bossHPBar;
         }
         else if (genericHPBarPrefab != null && genericHPBarContainer != null)
@@ -35,7 +46,7 @@ public class HPBarManager : MonoBehaviour
 
             if (bar != null)
             {
-                bar.Init(tank.name, tank.GetData().maxHp, tank.transform);
+                bar.Init(displayName, tank.GetData() != null ? tank.GetData().maxHp : 100, tank.transform);
                 _activeBars[tank] = bar;
             }
             else

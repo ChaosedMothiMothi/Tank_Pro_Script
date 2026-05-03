@@ -170,10 +170,22 @@ public class ExchangeBoxController : MonoBehaviour
     {
         switch (_assignedItem.itemType)
         {
-            case ItemType.Shield: if (_assignedItem.shieldData != null) player.EquipShield(_assignedItem.shieldData); break;
-            case ItemType.ChangeShell: if (_assignedItem.equipmentPrefab != null) player.ChangeShellPrefab(_assignedItem.equipmentPrefab); break;
-            case ItemType.ChangeMine: if (_assignedItem.equipmentPrefab != null) player.ChangeMinePrefab(_assignedItem.equipmentPrefab); break;
-            default: player.ApplyPowerUp(_assignedItem.itemType); break;
+            case ItemType.Shield:
+                if (_assignedItem.shieldData != null) player.EquipShield(_assignedItem.shieldData);
+                break;
+            case ItemType.ChangeShell:
+                if (_assignedItem.equipmentPrefab != null) player.ChangeShellPrefab(_assignedItem.equipmentPrefab);
+                break;
+            case ItemType.ChangeMine:
+                if (_assignedItem.equipmentPrefab != null) player.ChangeMinePrefab(_assignedItem.equipmentPrefab);
+                break;
+            case ItemType.ExtraLife:
+                // ★追加: ショップ箱から1UPを買った時
+                if (GameManager.Instance != null) GameManager.Instance.AddPlayerLife();
+                break;
+            default:
+                player.ApplyPowerUp(_assignedItem.itemType);
+                break;
         }
     }
 

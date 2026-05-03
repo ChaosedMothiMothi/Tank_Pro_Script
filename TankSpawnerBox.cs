@@ -8,6 +8,16 @@ using System.Reflection;
 [RequireComponent(typeof(TankStatus))]
 public class TankSpawnerBox : MonoBehaviour
 {
+
+    [System.Serializable]
+    public class SpawnEntry
+    {
+        [Tooltip("出現させるプレハブ")]
+        public GameObject prefab;
+        [Tooltip("出現する確率の重み（大きいほど出やすい）")]
+        public int weight = 10;
+    }
+
     [Header("Box Settings")]
     [Tooltip("ボックス自体の耐久値。展開前に削り切られると壊れる")]
     public int maxHp = 30;
@@ -23,9 +33,12 @@ public class TankSpawnerBox : MonoBehaviour
     public GameObject spawnEffectPrefab;
 
     [Header("Prefabs")]
-    [Tooltip("展開させる中身のプレハブ（戦車、または地雷など）")]
-    public GameObject entityToSpawnPrefab;
+    // ★修正: 従来の単一プレハブ変数を削除し、リストに変更
+    [Tooltip("展開させる中身の候補リスト（重み付きでランダムに選ばれます）")]
+    public List<SpawnEntry> entitiesToSpawn;
 
+    // ★追加: 実際に選ばれたプレハブを記憶しておく変数
+    private GameObject _selectedPrefab;
     private TankStatus _owner;
     private TeamType _team;
     private bool _isProcessed = false;
@@ -35,6 +48,8 @@ public class TankSpawnerBox : MonoBehaviour
     private TankStatus _myTankStatus;
     private GameObject _dummyVisual;
     private int _currentBoxHp; // ★追加: 箱専用の独立したHP変数
+
+    public System.Action<TankStatus> OnTankSpawned;
 
     private void Awake()
     {
@@ -58,7 +73,6 @@ public class TankSpawnerBox : MonoBehaviour
         _owner = owner;
         _team = team;
 
-        // ★修正: TankStatusの厄介なダメージ処理を避け、箱独自のHPに設定する
         _currentBoxHp = maxHp;
 
         if (_myTankStatus != null)
@@ -85,9 +99,13 @@ public class TankSpawnerBox : MonoBehaviour
             StartCoroutine(RestoreCollisionRoutine(myColliders, ownerColliders));
         }
 
+        // ★追加: ボックスが設置された瞬間に、中身をランダムに決定する
+        _selectedPrefab = GetRandomPrefab();
+
         CreateDummyVisual();
         StartCoroutine(SpawnRoutine());
     }
+
 
     private void Update()
     {
@@ -96,6 +114,26 @@ public class TankSpawnerBox : MonoBehaviour
         {
             BreakBox();
         }
+    }
+
+    // ★追加: 重みを考慮してリストからランダムにプレハブを選ぶメソッド
+    private GameObject GetRandomPrefab()
+    {
+        if (entitiesToSpawn == null || entitiesToSpawn.Count == 0) return null;
+
+        int totalWeight = 0;
+        foreach (var entry in entitiesToSpawn) totalWeight += entry.weight;
+
+        int randomValue = Random.Range(0, totalWeight);
+        int currentWeight = 0;
+
+        foreach (var entry in entitiesToSpawn)
+        {
+            currentWeight += entry.weight;
+            if (randomValue < currentWeight) return entry.prefab;
+        }
+
+        return entitiesToSpawn[0].prefab; // 安全対策
     }
 
     // ★追加: 箱が破壊された（展開失敗した）時の処理
@@ -119,10 +157,11 @@ public class TankSpawnerBox : MonoBehaviour
 
     private void CreateDummyVisual()
     {
-        if (entityToSpawnPrefab == null) return;
+        // ★修正: ランダムで選ばれたプレハブ (_selectedPrefab) を使う
+        if (_selectedPrefab == null) return;
 
         Vector3 spawnPos = transform.position + Vector3.up * spawnOffsetY;
-        _dummyVisual = Instantiate(entityToSpawnPrefab, spawnPos, transform.rotation, transform);
+        _dummyVisual = Instantiate(_selectedPrefab, spawnPos, transform.rotation, transform);
         _dummyVisual.transform.localScale = Vector3.one * 0.4f;
 
         foreach (var mb in _dummyVisual.GetComponentsInChildren<MonoBehaviour>()) mb.enabled = false;
@@ -152,6 +191,9 @@ public class TankSpawnerBox : MonoBehaviour
         }
     }
 
+    // ==========================================
+    // ★修正: ボックス展開処理（生まれた戦車をボスに通知する）
+    // ==========================================
     private IEnumerator SpawnRoutine()
     {
         float timer = 0f;
@@ -188,10 +230,11 @@ public class TankSpawnerBox : MonoBehaviour
 
         ScatterChildParts();
 
-        if (entityToSpawnPrefab != null)
+        // ★修正: _selectedPrefab から実体を生成する
+        if (_selectedPrefab != null)
         {
             Vector3 spawnPos = transform.position + Vector3.up * spawnOffsetY;
-            GameObject spawnedObj = Instantiate(entityToSpawnPrefab, spawnPos, transform.rotation);
+            GameObject spawnedObj = Instantiate(_selectedPrefab, spawnPos, transform.rotation);
 
             TankStatus spawnedTank = spawnedObj.GetComponentInChildren<TankStatus>();
             if (spawnedTank != null)
@@ -201,6 +244,9 @@ public class TankSpawnerBox : MonoBehaviour
                 if (enemyCtrl != null) enemyCtrl.SetDropPartsCount(0);
 
                 spawnedTank.ApplyStun(0.5f);
+
+                // 生まれた戦車をボスに通知
+                OnTankSpawned?.Invoke(spawnedTank);
             }
             else
             {

@@ -101,9 +101,16 @@ public class ShellController : MonoBehaviour
         Destroy(gameObject, shellData.lifeTime);
     }
 
+    // ==========================================
+    // ★修正: 弾の跳弾処理（壁の隙間での連続スタック防止）
+    // ==========================================
     private void OnCollisionEnter(Collision collision)
     {
         if (_isExploded) return;
+
+        // ★追加: クールダウン中（0.05秒間）は、いかなる衝突判定も完全に無視してすり抜けるようにする（スタック防止）
+        if (_bounceCooldown > 0) return;
+
         GameObject hitObj = collision.collider.gameObject;
 
         if (hitObj.GetComponent<WeakPoint>() != null ||
@@ -117,29 +124,40 @@ public class ShellController : MonoBehaviour
 
         if (hitObj.layer == LayerMask.NameToLayer("Wall") || hitObj.CompareTag("Wall"))
         {
-            Vector3 reflectDir = Vector3.Reflect(_lastVelocity.normalized, collision.contacts[0].normal);
-
-            _rb.angularVelocity = Vector3.zero;
-            transform.forward = reflectDir;
-
-            // ★修正: 保存しておいた速度(_currentSpeed)を使用する
-            _rb.linearVelocity = reflectDir * _currentSpeed;
-
-            _lastVelocity = _rb.linearVelocity;
-
-            if (_bounceCooldown <= 0)
+            if (_remainingBounces > 0)
             {
-                if (_remainingBounces > 0)
-                {
-                    EffectManager.Instance.PlayWallHit(collision.contacts[0].point, -transform.forward);
-                    EffectManager.Instance.RefrectionSound();
-                    _remainingBounces--;
-                    _bounceCooldown = 0.05f;
-                }
-                else HandleDestruction(collision);
+                // 跳ね返りベクトルの計算
+                Vector3 reflectDir = Vector3.Reflect(_lastVelocity.normalized, collision.contacts[0].normal);
+                reflectDir.y = 0; // 高さは水平に保つ
+                reflectDir.Normalize();
+
+                _rb.angularVelocity = Vector3.zero;
+                transform.forward = reflectDir;
+
+                _rb.linearVelocity = reflectDir * _currentSpeed;
+                _lastVelocity = _rb.linearVelocity;
+
+                // ★追加: 壁の中にめり込んで連続ヒットしないよう、当たった壁の法線方向に少しだけ強制的に押し出す
+                transform.position += collision.contacts[0].normal * 0.05f;
+
+                EffectManager.Instance.PlayWallHit(collision.contacts[0].point, -transform.forward);
+                EffectManager.Instance.RefrectionSound();
+
+                _remainingBounces--;
+
+                // ★修正: クールダウン時間をセット（この間は次の衝突判定を行わない）
+                _bounceCooldown = 0.05f;
+            }
+            else
+            {
+                // 跳弾回数が0の場合は爆発（消滅）する
+                HandleDestruction(collision);
             }
         }
-        else HandleDestruction(collision);
+        else
+        {
+            HandleDestruction(collision);
+        }
     }
 
     private void OnTriggerEnter(Collider other)

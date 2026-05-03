@@ -74,7 +74,7 @@ public class TankStatus : MonoBehaviour
     // ★追加: 暴走時専用の加算速度を保存する変数
     private float _berserkBonusSpeedVal = 0f;
 
-
+    private Vector3 _originalLocalPosition;
 
     private void Start()
     {
@@ -121,7 +121,15 @@ public class TankStatus : MonoBehaviour
         if (IsJammed)
         {
             _jamTimer -= Time.deltaTime;
-            if (_jamTimer <= 0f) IsJammed = false;
+            if (_jamTimer <= 0f)
+            {
+                IsJammed = false;
+                ResetJammingEffect(); // ジャミングが解けたら色と位置を元に戻す
+            }
+            else
+            {
+                UpdateJammingEffect(); // ★これがないとビリビリ演出が出ません
+            }
         }
 
         // ★修正: 暴走中のタイマー進行と、全期間を通した明滅処理
@@ -584,4 +592,69 @@ public class TankStatus : MonoBehaviour
         Die();
     }
 
+    // ==========================================
+    // ★追加・修正: ジャミング中のビリビリ＆紫色演出
+    // ==========================================
+    private void UpdateJammingEffect()
+    {
+        Renderer[] renderers = GetComponentsInChildren<Renderer>();
+        if (renderers == null) return;
+
+        // 高速でチカチカさせる（ビリビリ感）
+        float blinkSpeed = 40.0f;
+        float intensity = Mathf.Abs(Mathf.Sin(Time.time * blinkSpeed));
+
+        // ★通常より少し暗い「紫色」と「明るめの紫色」を行き来させる
+        Color darkPurple = new Color(0.4f, 0.1f, 0.6f);
+        Color lightPurple = new Color(0.7f, 0.4f, 0.9f);
+        Color currentColor = Color.Lerp(darkPurple, lightPurple, intensity);
+
+        foreach (var r in renderers)
+        {
+            if (r != null)
+            {
+                foreach (var mat in r.materials)
+                {
+                    if (mat.HasProperty("_Color")) mat.SetColor("_Color", currentColor);
+                }
+            }
+        }
+
+        // ★車体を少しだけビリビリと震わせる（位置を戻す処理は ResetJammingEffect で行う）
+        if (_originalLocalPosition == Vector3.zero && transform.Find("Body") != null)
+        {
+            _originalLocalPosition = transform.Find("Body").localPosition;
+        }
+
+        Transform bodyTransform = transform.Find("Body") ?? transform;
+        // 元の位置を中心に、小さな円の範囲でランダムに揺らす
+        bodyTransform.localPosition = _originalLocalPosition + (Vector3)Random.insideUnitCircle * 0.05f;
+    }
+
+    private void ResetJammingEffect()
+    {
+        Renderer[] renderers = GetComponentsInChildren<Renderer>();
+
+        if (renderers != null)
+        {
+            foreach (var r in renderers)
+            {
+                if (r != null)
+                {
+                    foreach (var mat in r.materials)
+                    {
+                        // 色を標準の白（元のテクスチャの色）に戻す
+                        if (mat.HasProperty("_Color")) mat.SetColor("_Color", Color.white);
+                    }
+                }
+            }
+        }
+
+        // 震わせていた位置を元に戻す
+        Transform bodyTransform = transform.Find("Body") ?? transform;
+        if (_originalLocalPosition != Vector3.zero)
+        {
+            bodyTransform.localPosition = _originalLocalPosition;
+        }
+    }
 }

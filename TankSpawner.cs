@@ -18,6 +18,10 @@ public class TankSpawner : MonoBehaviour
     [Tooltip("出現する戦車リスト（重み付き）")]
     public List<SpawnEntry> tankPrefabs;
 
+    // ★追加: 初回スポーン用の時間
+    [Tooltip("ゲーム開始から【初回】のスポーンが行われるまでの時間（秒）")]
+    public float initialSpawnDelay = 2.0f;
+
     [Tooltip("スポーン間隔（秒）")]
     public float spawnInterval = 5.0f;
 
@@ -51,6 +55,7 @@ public class TankSpawner : MonoBehaviour
     private bool _isDestroyed = false;
     private Coroutine _flashCoroutine;
     private Collider _garageCollider; // ガレージ自身のコライダー
+    private bool _isFirstSpawn = true;
 
     private void Start()
     {
@@ -62,22 +67,27 @@ public class TankSpawner : MonoBehaviour
     {
         if (_isDestroyed) return;
 
-        // ★追加: ゲーム開始前、または終了時にはスポーンのタイマーを止める
         if (GameManager.Instance != null && (!GameManager.Instance.IsGameStarted || GameManager.Instance.IsGameFinished()))
         {
-            return; // 何もせず待機
+            return;
         }
 
         if (maxTotalSpawns == 0 || _spawnedCount < maxTotalSpawns)
         {
             _timer += Time.deltaTime;
 
-            if (_timer >= spawnInterval)
+            // ★修正: 初回と次回以降で、判定するターゲット時間を切り替える
+            float targetInterval = _isFirstSpawn ? initialSpawnDelay : spawnInterval;
+
+            if (_timer >= targetInterval)
             {
                 if (CheckCanSpawn())
                 {
                     SpawnTank();
                     _timer = 0f;
+
+                    // ★初回が終わったらフラグを折り、次回からは通常の spawnInterval にする
+                    _isFirstSpawn = false;
                 }
             }
         }

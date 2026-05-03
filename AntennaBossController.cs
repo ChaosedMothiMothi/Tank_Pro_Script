@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine.AI;
+using UnityEngine.InputSystem;
 
 [RequireComponent(typeof(Rigidbody))]
 public class AntennaBossController : MonoBehaviour
@@ -14,41 +15,28 @@ public class AntennaBossController : MonoBehaviour
     public Transform firePoint;
     public GameObject minePrefab;
 
-    [Header("--- Boss: Burst Fire Settings ---")]
-    [Tooltip("一度の攻撃で連射する弾の数")]
-    public int burstCount = 3;
-    [Tooltip("連射時の弾と弾の間隔（秒）")]
-    public float burstInterval = 0.15f;
+    [Header("Debug Settings")]
+    public bool isDebugMode = false;
 
-    [Tooltip("【重み】誘導撃ち（ターゲットを狙い続ける）を行う確率割合")]
+    [Header("--- Boss: Burst Fire Settings ---")]
+    public int burstCount = 3;
+    public float burstInterval = 0.15f;
     public float trackingFireWeight = 70f;
-    [Tooltip("【重み】ランダム撃ち（砲塔を振り回してばらまく）を行う確率割合")]
     public float randomFireWeight = 30f;
 
     [Header("--- Boss: Jamming Settings ---")]
-    [Tooltip("ジャミング攻撃を解禁するHPの割合（0.5ならHP半分以下で発動）")]
     [Range(0.1f, 1.0f)] public float jammingHpThreshold = 0.5f;
-    [Tooltip("ジャミング攻撃を行う基本間隔（秒）")]
     public float jammingBaseInterval = 6.0f;
-    [Tooltip("ジャミング間隔の誤差（±この秒数だけランダムにズレる）")]
     public float jammingVariance = 1.5f;
-    [Tooltip("ジャミング波の最大到達半径")]
     public float jammingMaxRadius = 15.0f;
-    [Tooltip("ジャミング波が広がるスピード")]
     public float jammingExpandSpeed = 15.0f;
-    [Tooltip("ジャミングに触れた際に行動不能になる時間（秒）")]
     public float jammingStunDuration = 2.0f;
-
-    // ★追加: 種類ごとに暴走時の「加算する速度」を設定できるようにする（インスペクターで変更可能）
-    [Tooltip("ジャミング波に触れた自爆戦車に【加算】する暴走時の移動速度（例: +20）")]
     public float berserkBonusSpeed = 5.0f;
-
-    [Tooltip("ジャミング波のマテリアル（半透明の黄色などを設定。空欄でも自動生成します）")]
     public Material jammingMaterial;
 
     private Rigidbody _rb;
     private NavMeshAgent _agent;
-    private LineRenderer _lineRenderer; // ★追加: デバッグ射線用
+    private LineRenderer _lineRenderer;
     private TankStatus _currentTarget;
     private Vector3 _moveTarget;
     private float _moveTimer;
@@ -69,6 +57,16 @@ public class AntennaBossController : MonoBehaviour
 
     private bool _isJammingPhase = false;
     private float _jammingTimer = 0f;
+    private bool _hasBattleStarted = false;
+    private bool _lastDebugMode = false;
+    private Vector2 _debugMoveInput;
+
+    // ==========================================
+    // ★追加: 厳格な配置管理とクールタイム
+    // ==========================================
+    private List<GameObject> _activeSpawners = new List<GameObject>();
+    private List<TankStatus> _spawnedTanks = new List<TankStatus>();
+    private float _mineCooldownTimer = 0f; // 絶対に連発させないためのクールタイム
 
     private void Awake()
     {
@@ -78,7 +76,6 @@ public class AntennaBossController : MonoBehaviour
 
     private void Start()
     {
-        // ★追加: デバッグ射線用のLineRendererセットアップ
         _lineRenderer = GetComponent<LineRenderer>();
         if (_lineRenderer == null) _lineRenderer = gameObject.AddComponent<LineRenderer>();
         _lineRenderer.enabled = false;
@@ -93,12 +90,37 @@ public class AntennaBossController : MonoBehaviour
             _agent.updatePosition = false;
             _agent.updateRotation = false;
             _agent.updateUpAxis = false;
+            _agent.enabled = !isDebugMode;
+        }
+
+        if (NavMesh.SamplePosition(transform.position, out NavMeshHit navHit, 10.0f, NavMesh.AllAreas))
+        {
+            float offsetY = 0f;
+            Collider[] cols = GetComponentsInChildren<Collider>();
+            float minColY = float.MaxValue;
+            bool foundCol = false;
+
+            foreach (var c in cols)
+            {
+                if (!c.isTrigger)
+                {
+                    if (c.bounds.min.y < minColY) minColY = c.bounds.min.y;
+                    foundCol = true;
+                }
+            }
+
+            if (foundCol) offsetY = transform.position.y - minColY;
+
+            Vector3 groundPos = new Vector3(transform.position.x, navHit.position.y + offsetY + 0.05f, transform.position.z);
+            transform.position = groundPos;
+            if (_agent != null && _agent.enabled) _agent.Warp(groundPos);
         }
 
         _currentAmmoCount = tankStatus.GetTotalMaxAmmo();
         DecideNextMoveTarget();
 
         if (enemyData != null) _partsDropCount = enemyData.partsDropCount;
+        _lastDebugMode = isDebugMode;
     }
 
     private void Update()
@@ -107,28 +129,65 @@ public class AntennaBossController : MonoBehaviour
         {
             if (!_hasDroppedParts) { _hasDroppedParts = true; DropParts(); }
             if (_lineRenderer != null) _lineRenderer.enabled = false;
-            if (_agent != null && _agent.enabled) _agent.isStopped = true;
+            if (_agent != null && _agent.enabled && _agent.isOnNavMesh) _agent.isStopped = true;
             return;
         }
 
         if (GameManager.Instance != null && (!GameManager.Instance.IsGameStarted || GameManager.Instance.IsGameFinished()))
         {
             if (_lineRenderer != null) _lineRenderer.enabled = false;
-            if (_agent != null && _agent.enabled) _agent.isStopped = true;
+            if (!_hasBattleStarted) _rb.isKinematic = true;
+            if (_agent != null && _agent.enabled && _agent.isOnNavMesh) _agent.isStopped = true;
             return;
+        }
+
+        if (!_hasBattleStarted)
+        {
+            _hasBattleStarted = true;
+            _rb.isKinematic = false;
+            _rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+
+            if (_agent != null && _agent.enabled && _agent.isOnNavMesh)
+            {
+                _agent.isStopped = false;
+                _agent.SetDestination(_moveTarget);
+            }
+        }
+
+        if (_lastDebugMode != isDebugMode)
+        {
+            if (isDebugMode)
+            {
+                if (_agent != null && _agent.isOnNavMesh) { _agent.isStopped = true; _agent.enabled = false; }
+                _isActionRigid = false;
+            }
+            else
+            {
+                if (_agent != null) { _agent.enabled = true; _agent.Warp(transform.position); }
+                if (_agent != null && _agent.isOnNavMesh) { _agent.isStopped = false; _agent.SetDestination(_moveTarget); }
+            }
+            _lastDebugMode = isDebugMode;
         }
 
         if (_fireCooldownTimer > 0) _fireCooldownTimer -= Time.deltaTime;
 
-        HandleJammingLogic();
+        // ★追加: 厳密な設置クールタイムの進行
+        if (_mineCooldownTimer > 0) _mineCooldownTimer -= Time.deltaTime;
 
-        ThinkTarget();
-        ThinkMoveLogic();
-        HandleTurretAI();
+        if (isDebugMode)
+        {
+            HandleDebugInput();
+        }
+        else
+        {
+            HandleJammingLogic();
+            ThinkTarget();
+            ThinkMoveLogic();
+            HandleTurretAI();
 
-        if (!_isActionRigid) ThinkMine();
+            if (!_isActionRigid) ThinkMine();
+        }
 
-        // ★追加: アンテナ戦車のデバッグ射線を可視化
         if (DebugVisualizer.Instance != null && _lineRenderer != null && firePoint != null)
         {
             int bounces = 0;
@@ -160,6 +219,46 @@ public class AntennaBossController : MonoBehaviour
     {
         if (tankStatus.IsDead || tankStatus.IsInStun) return;
         if (!_isActionRigid) HandleTurretRotation();
+    }
+
+    private void HandleDebugInput()
+    {
+        if (Keyboard.current == null) return;
+        float h = 0f; float v = 0f;
+        if (Keyboard.current.aKey.isPressed || Keyboard.current.leftArrowKey.isPressed) h = -1f;
+        if (Keyboard.current.dKey.isPressed || Keyboard.current.rightArrowKey.isPressed) h = 1f;
+        if (Keyboard.current.wKey.isPressed || Keyboard.current.upArrowKey.isPressed) v = 1f;
+        if (Keyboard.current.sKey.isPressed || Keyboard.current.downArrowKey.isPressed) v = -1f;
+        _debugMoveInput = new Vector2(h, v);
+
+        if (Keyboard.current.spaceKey.wasPressedThisFrame && !_isActionRigid) StartCoroutine(ExecuteJammingRoutine());
+
+        bool firePressed = (Mouse.current != null && Mouse.current.leftButton.isPressed) || Keyboard.current.zKey.isPressed;
+        if (firePressed && !_isActionRigid && _fireCooldownTimer <= 0)
+        {
+            _currentAmmoCount = tankStatus.GetData().maxAmmo;
+            StartCoroutine(BurstFireRoutine());
+        }
+
+        // ★追加: マウスのホイールクリック（中ボタン）で地雷 / タンクスポーンボックスを設置
+        if (Mouse.current != null && Mouse.current.middleButton.wasPressedThisFrame && !_isActionRigid)
+        {
+            StartCoroutine(MineRoutine());
+        }
+
+        if (turretTransform != null && Mouse.current != null)
+        {
+            Vector2 mousePos = Mouse.current.position.ReadValue();
+            Ray ray = Camera.main.ScreenPointToRay(mousePos);
+            Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
+            if (groundPlane.Raycast(ray, out float enter))
+            {
+                Vector3 hitPoint = ray.GetPoint(enter);
+                Vector3 dir = (hitPoint - turretTransform.position).normalized;
+                dir.y = 0;
+                if (dir != Vector3.zero) _independentTurretRotation = Quaternion.LookRotation(dir);
+            }
+        }
     }
 
     private void HandleJammingLogic()
@@ -231,8 +330,6 @@ public class AntennaBossController : MonoBehaviour
         wave.maxRadius = jammingMaxRadius;
         wave.expandSpeed = jammingExpandSpeed;
         wave.stunDuration = jammingStunDuration;
-
-        // ★追加: 暴走時の速度アップ値を波に持たせて伝達する
         wave.berserkBonusSpeed = this.berserkBonusSpeed;
 
         yield return new WaitForSeconds(0.5f);
@@ -286,7 +383,7 @@ public class AntennaBossController : MonoBehaviour
             while (t < waitTime)
             {
                 t += Time.deltaTime;
-                if (isTrackingFire)
+                if (isTrackingFire && !isDebugMode)
                 {
                     if (_currentTarget != null)
                     {
@@ -298,7 +395,7 @@ public class AntennaBossController : MonoBehaviour
                         }
                     }
                 }
-                else
+                else if (!isDebugMode)
                 {
                     _independentTurretRotation *= Quaternion.Euler(0, randomSpinSpeed * Time.deltaTime, 0);
                 }
@@ -322,78 +419,26 @@ public class AntennaBossController : MonoBehaviour
     private void ThinkMoveLogic()
     {
         _moveTimer += Time.deltaTime;
-        bool shouldUpdateTarget = false;
 
-        if (enemyData.aiType != EnemyData.AIType.Neat)
+        float distToDest = (_agent != null && _agent.isOnNavMesh && _agent.hasPath) ? _agent.remainingDistance : Vector3.Distance(transform.position, _moveTarget);
+        if (distToDest < 3.0f || _moveTimer > 8.0f)
         {
-            float distToDest = (_agent != null && _agent.isOnNavMesh && _agent.hasPath) ? _agent.remainingDistance : Vector3.Distance(transform.position, _moveTarget);
-            if (distToDest < 2.0f || _moveTimer > 5.0f) shouldUpdateTarget = true;
+            DecideNextMoveTarget();
+            if (_agent != null && _agent.isOnNavMesh) _agent.SetDestination(_moveTarget);
+            _moveTimer = 0f;
         }
-
-        if (shouldUpdateTarget) { DecideNextMoveTarget(); _moveTimer = 0f; }
 
         if (_rb.linearVelocity.magnitude < 0.1f && !_isActionRigid && enemyData.aiType != EnemyData.AIType.Neat)
         {
             _stuckTimer += Time.deltaTime;
-            if (_stuckTimer > 1.0f) { DecideNextMoveTarget(); _stuckTimer = 0f; }
+            if (_stuckTimer > 1.0f)
+            {
+                DecideNextMoveTarget();
+                if (_agent != null && _agent.isOnNavMesh) _agent.SetDestination(_moveTarget);
+                _stuckTimer = 0f;
+            }
         }
         else _stuckTimer = 0f;
-
-        if (_agent != null && _agent.isOnNavMesh)
-        {
-            Vector3 finalDestination = _moveTarget;
-            switch (enemyData.aiType)
-            {
-                case EnemyData.AIType.Neat: finalDestination = transform.position; break;
-                case EnemyData.AIType.Idiot:
-                case EnemyData.AIType.Wanderer: finalDestination = _moveTarget; break;
-                case EnemyData.AIType.Aggressive:
-                    if (_currentTarget != null)
-                    {
-                        float dist = Vector3.Distance(transform.position, _currentTarget.transform.position);
-                        if (dist > 5.0f) finalDestination = _currentTarget.transform.position;
-                        else if (dist < 3.0f) finalDestination = transform.position + (transform.position - _currentTarget.transform.position).normalized * 3.0f;
-                        else finalDestination = transform.position + (Vector3.Cross((_currentTarget.transform.position - transform.position).normalized, Vector3.up).normalized) * 3.0f;
-                    }
-                    break;
-                case EnemyData.AIType.Coward:
-                    if (_currentTarget != null)
-                    {
-                        if (Vector3.Distance(transform.position, _currentTarget.transform.position) < 10.0f)
-                        {
-                            Vector3 awayDir = (transform.position - _currentTarget.transform.position).normalized;
-                            Vector3 runDir = (awayDir + new Vector3(Mathf.Sin(Time.time * 2f), 0, Mathf.Cos(Time.time * 2f)) * 0.5f).normalized;
-                            Vector3 targetPos = transform.position + runDir * 6.0f;
-                            if (NavMesh.SamplePosition(targetPos, out NavMeshHit navHit, 4.0f, NavMesh.AllAreas)) finalDestination = navHit.position;
-                            else finalDestination = transform.position + ((Vector3.zero - transform.position).normalized) * 3.0f;
-                        }
-                        else finalDestination = _moveTarget;
-                    }
-                    break;
-                case EnemyData.AIType.Sycophant:
-                    if (_leaderTarget == null || _leaderTarget.IsDead)
-                    {
-                        var allies = FindObjectsByType<TankStatus>(FindObjectsSortMode.None).Where(t => t.team == tankStatus.team && t != tankStatus && !t.IsDead).ToList();
-                        if (allies.Count > 0) _leaderTarget = allies[Random.Range(0, allies.Count)];
-                    }
-                    if (_leaderTarget != null)
-                    {
-                        if (Vector3.Distance(transform.position, _moveTarget) < 1.0f || Vector3.Distance(_moveTarget, _leaderTarget.transform.position) > 4.0f)
-                        {
-                            Vector3 targetPos = _leaderTarget.transform.position + new Vector3((Random.insideUnitCircle * 3.0f).x, 0, (Random.insideUnitCircle * 3.0f).y);
-                            if (NavMesh.SamplePosition(targetPos, out NavMeshHit navHit, 3.0f, NavMesh.AllAreas)) _moveTarget = navHit.position;
-                            else _moveTarget = _leaderTarget.transform.position;
-                        }
-                        finalDestination = _moveTarget;
-                    }
-                    break;
-                case EnemyData.AIType.Leadership:
-                    if (CountAllies() > 0) { if (_currentTarget != null) finalDestination = transform.position + (transform.position - _currentTarget.transform.position).normalized * 5.0f; }
-                    else { if (_currentTarget != null) finalDestination = _currentTarget.transform.position; }
-                    break;
-            }
-            _agent.SetDestination(finalDestination);
-        }
     }
 
     private void DecideNextMoveTarget()
@@ -416,58 +461,97 @@ public class AntennaBossController : MonoBehaviour
 
     private void ExecuteMovement()
     {
-        if (_isActionRigid || tankStatus.IsInStun || _agent == null || !_agent.isOnNavMesh) { StopMovementImmediate(); return; }
-
-        Vector3 baseDir = _agent.desiredVelocity;
-        if (enemyData.aiType != EnemyData.AIType.Neat && baseDir.magnitude < 0.1f) baseDir = transform.forward * tankStatus.GetCurrentMoveSpeed();
-        if (enemyData.aiType != EnemyData.AIType.Neat && baseDir.magnitude > 0.1f)
+        if (isDebugMode)
         {
-            float wobbleSpeed = (enemyData.aiType == EnemyData.AIType.Idiot) ? 3f : 1.5f;
-            float wobbleAmount = (enemyData.aiType == EnemyData.AIType.Idiot) ? 0.8f : 0.3f;
-            baseDir += Vector3.Cross(baseDir.normalized, Vector3.up) * Mathf.Sin(Time.time * wobbleSpeed) * wobbleAmount;
-        }
-
-        Vector3 finalDir = baseDir.normalized;
-
-        Vector3 tankAvoid = GetAvoidanceVector("Tank");
-        if (tankAvoid != Vector3.zero) finalDir = (finalDir + tankAvoid * 5.0f).normalized;
-
-        Vector3 deadlyAvoid = GetAvoidanceVector("Deadly");
-        if (deadlyAvoid != Vector3.zero) finalDir = (finalDir * 0.4f + deadlyAvoid * 3.0f).normalized;
-
-        Vector3 wallAvoid = GetWallAvoidanceVector(5.0f);
-        if (wallAvoid != Vector3.zero) finalDir = (finalDir * 0.2f + wallAvoid * 5.0f).normalized;
-
-        if (finalDir.magnitude < 0.1f) finalDir = transform.forward;
-
-        int obstacleMask = LayerMask.GetMask("Wall", "Spike");
-        if (Physics.SphereCast(transform.position + Vector3.up * 0.5f, 0.5f, finalDir, out RaycastHit sphereHit, 1.2f, obstacleMask))
-        {
-            Vector3 wallNormal = sphereHit.normal; wallNormal.y = 0;
-            Vector3 slideDir = Vector3.ProjectOnPlane(finalDir, wallNormal);
-            finalDir = (slideDir.magnitude > 0.1f) ? slideDir.normalized : wallNormal.normalized;
-        }
-
-        if (finalDir != Vector3.zero) _smoothedMoveDir = Vector3.Lerp(_smoothedMoveDir, finalDir, Time.fixedDeltaTime * 6.0f).normalized;
-        if (_smoothedMoveDir == Vector3.zero) _smoothedMoveDir = transform.forward;
-
-        if (_smoothedMoveDir.magnitude > 0.1f && enemyData.aiType != EnemyData.AIType.Neat)
-        {
-            float targetAngle = Mathf.Atan2(_smoothedMoveDir.x, _smoothedMoveDir.z) * Mathf.Rad2Deg;
-            float currentY = _rb.rotation.eulerAngles.y;
-            float nextAngle = Mathf.MoveTowardsAngle(currentY, targetAngle, tankStatus.GetCurrentRotationSpeed() * Time.fixedDeltaTime);
-            _rb.MoveRotation(Quaternion.Euler(0, nextAngle, 0));
-
-            if (Mathf.Abs(Mathf.DeltaAngle(currentY, targetAngle)) > 45.0f) _rb.linearVelocity = new Vector3(0, _rb.linearVelocity.y, 0);
-            else
+            Vector3 dir = new Vector3(_debugMoveInput.x, 0, _debugMoveInput.y).normalized;
+            if (dir.magnitude > 0.1f)
             {
+                float targetAngle = Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg;
+                float currentY = _rb.rotation.eulerAngles.y;
+                float nextAngle = Mathf.MoveTowardsAngle(currentY, targetAngle, tankStatus.GetCurrentRotationSpeed() * Time.fixedDeltaTime);
+                _rb.MoveRotation(Quaternion.Euler(0, nextAngle, 0));
+
                 Vector3 vel = transform.forward * tankStatus.GetCurrentMoveSpeed();
                 _rb.linearVelocity = new Vector3(vel.x, _rb.linearVelocity.y, vel.z);
+            }
+            else StopMovementImmediate();
+            return;
+        }
+
+        if (_isActionRigid || tankStatus.IsInStun || _agent == null || !_agent.isOnNavMesh) { StopMovementImmediate(); return; }
+
+        Vector3 desiredVel = _agent.desiredVelocity;
+
+        if (desiredVel.magnitude < 0.1f)
+        {
+            desiredVel = transform.forward * tankStatus.GetCurrentMoveSpeed();
+        }
+
+        Vector3 dangerDir = GetAvoidanceVector("Deadly");
+        if (dangerDir != Vector3.zero)
+        {
+            Vector3 baseEscape = (desiredVel.magnitude > 0.1f ? desiredVel.normalized : transform.forward);
+            desiredVel = Vector3.Lerp(baseEscape, dangerDir.normalized, 0.8f).normalized * tankStatus.GetCurrentMoveSpeed();
+        }
+
+        int obstacleMask = LayerMask.GetMask("Wall", "Spike");
+        Vector3 avoidanceForce = Vector3.zero;
+        Vector3[] rayDirs = { transform.forward, Quaternion.Euler(0, 35, 0) * transform.forward, Quaternion.Euler(0, -35, 0) * transform.forward };
+        foreach (var rDir in rayDirs)
+        {
+            if (Physics.Raycast(transform.position + Vector3.up * 0.5f, rDir, out RaycastHit rayHit, 3.5f, obstacleMask))
+            {
+                float strength = 1.0f - (rayHit.distance / 3.5f);
+                avoidanceForce += rayHit.normal * strength;
+            }
+        }
+        if (avoidanceForce != Vector3.zero)
+        {
+            avoidanceForce.y = 0;
+            desiredVel = (desiredVel.normalized + avoidanceForce.normalized * 2.0f).normalized * tankStatus.GetCurrentMoveSpeed();
+        }
+
+        Vector3 checkDir = desiredVel.magnitude > 0.1f ? desiredVel.normalized : transform.forward;
+        float bossRadius = 0.6f;
+        if (Physics.SphereCast(transform.position + Vector3.up * 0.5f, bossRadius, checkDir, out RaycastHit sphereHit, 1.5f, obstacleMask))
+        {
+            Vector3 wallNormal = sphereHit.normal; wallNormal.y = 0;
+            Vector3 slideVel = Vector3.ProjectOnPlane(desiredVel, wallNormal);
+            if (slideVel.magnitude < 0.1f) desiredVel = wallNormal * tankStatus.GetCurrentMoveSpeed();
+            else desiredVel = (slideVel.normalized * tankStatus.GetCurrentMoveSpeed()) + (wallNormal * 1.5f);
+        }
+
+        if (desiredVel.magnitude > 0.1f && enemyData.aiType != EnemyData.AIType.Neat)
+        {
+            float targetAngle = Mathf.Atan2(desiredVel.x, desiredVel.z) * Mathf.Rad2Deg;
+            float currentY = _rb.rotation.eulerAngles.y;
+            float rotSpeed = tankStatus.GetCurrentRotationSpeed();
+
+            float nextAngle = Mathf.MoveTowardsAngle(currentY, targetAngle, rotSpeed * Time.fixedDeltaTime);
+            _rb.MoveRotation(Quaternion.Euler(0, nextAngle, 0));
+
+            float angleDiff = Mathf.Abs(Mathf.DeltaAngle(nextAngle, targetAngle));
+
+            if (angleDiff <= 60.0f)
+            {
+                float speed = tankStatus.GetCurrentMoveSpeed();
+                if (angleDiff > 45.0f) speed *= 0.8f;
+                Vector3 vel = transform.forward * speed;
+                _rb.linearVelocity = new Vector3(vel.x, _rb.linearVelocity.y, vel.z);
+            }
+            else
+            {
+                _rb.linearVelocity = new Vector3(0, _rb.linearVelocity.y, 0);
             }
         }
         else StopMovementImmediate();
 
-        if (_agent != null && _agent.isOnNavMesh) _agent.nextPosition = _rb.position;
+        if (_agent.isOnNavMesh)
+        {
+            Vector3 syncPos = _rb.position;
+            syncPos.y = _agent.nextPosition.y;
+            _agent.nextPosition = syncPos;
+        }
     }
 
     private Vector3 GetAvoidanceVector(string type)
@@ -506,41 +590,30 @@ public class AntennaBossController : MonoBehaviour
                     if (dist < avoidRad) avoidVec += awayDir * (1.0f - dist / avoidRad);
                 }
             }
-            else if (type == "Tank")
-            {
-                TankStatus otherTank = hit.GetComponentInParent<TankStatus>();
-                if (otherTank != null && !otherTank.IsDead)
-                {
-                    if (dist < 3.5f) avoidVec += awayDir * (1.0f - dist / 3.5f);
-                }
-            }
         }
         return avoidVec;
     }
 
-    private Vector3 GetWallAvoidanceVector(float maxDist)
-    {
-        Vector3 avoidVec = Vector3.zero;
-        int obstacleMask = LayerMask.GetMask("Wall", "Spike");
-        float[] angles = { 0, 30, -30, 60, -60, 90, -90 };
-
-        foreach (float angle in angles)
-        {
-            Vector3 dir = Quaternion.Euler(0, angle, 0) * transform.forward;
-            float checkDist = (Mathf.Abs(angle) >= 90) ? maxDist * 0.6f : maxDist;
-            if (Physics.Raycast(transform.position + Vector3.up * 0.5f, dir, out RaycastHit hit, checkDist, obstacleMask))
-            {
-                avoidVec += hit.normal * (1.0f - (hit.distance / checkDist));
-            }
-        }
-        return avoidVec;
-    }
-
+    // ==========================================
+    // ★修正: クールタイムと配置数の厳密な管理
+    // ==========================================
     private void ThinkMine()
     {
-        if (!enemyData.useMine || tankStatus.ActiveMineCount >= tankStatus.GetTotalMineLimit()) return;
+        if (!enemyData.useMine) return;
 
-        // 近くに既存の地雷やスポナーがあれば置かない（密集防止）
+        // ★ク��ルタイム中は絶対に置かない
+        if (_mineCooldownTimer > 0f) return;
+
+        // 死んだものや壊れたものをリストから掃除
+        _activeSpawners.RemoveAll(s => s == null);
+        _spawnedTanks.RemoveAll(t => t == null || t.IsDead);
+
+        // 自分が置いたものだけをカウントする
+        int activeCount = _activeSpawners.Count + _spawnedTanks.Count;
+
+        int maxLimit = tankStatus.GetData().maxMines;
+        if (activeCount >= maxLimit) return; // 上限に達していたら置かない
+
         if (Physics.OverlapSphere(transform.position, enemyData.minePlacementSpacing).Any(c => c.CompareTag("Mine"))) return;
 
         bool shouldPlace = false;
@@ -548,62 +621,73 @@ public class AntennaBossController : MonoBehaviour
 
         switch (enemyData.aiType)
         {
-            case EnemyData.AIType.Idiot: if (CountAlliesNearby(5.0f) == 0 && Random.value < 0.01f) shouldPlace = true; break;
+            case EnemyData.AIType.Idiot: if (Random.value < 0.01f) shouldPlace = true; break;
             case EnemyData.AIType.Coward: if (distToTarget < 6.0f) shouldPlace = true; break;
             case EnemyData.AIType.Aggressive: if (distToTarget < 5.0f) shouldPlace = true; break;
             case EnemyData.AIType.Wanderer: if (Random.value < 0.02f) shouldPlace = true; break;
-            case EnemyData.AIType.Sycophant: if (_leaderTarget == null && Random.value < 0.02f) shouldPlace = true; break;
-            case EnemyData.AIType.Leadership: if ((CountAllies() > 0 && distToTarget < 6.0f) || (CountAllies() == 0 && distToTarget < 5.0f)) shouldPlace = true; break;
+            default: if (Random.value < 0.02f) shouldPlace = true; break;
         }
 
-        if (shouldPlace) StartCoroutine(MineRoutine());
+        if (shouldPlace)
+        {
+            // ★修正: コルーチン（配置モーション）を呼ぶ「前」にクールタイムを発生させ、1フレームの隙に連続で置くのを完全に防ぐ！
+            _mineCooldownTimer = 5.0f;
+            StartCoroutine(MineRoutine());
+        }
     }
 
     private IEnumerator MineRoutine()
     {
-        _isActionRigid = true;
+        _isActionRigid = true; // ★モーション硬直
+
         GameObject prefabToUse = minePrefab != null ? minePrefab : tankStatus.GetMinePrefab();
 
         if (prefabToUse != null)
         {
             GameObject mineObj = Instantiate(prefabToUse, transform.position, Quaternion.identity);
-            if (mineObj.TryGetComponent(out MineController mineCtrl))
+
+            // ★修正: 生成したものはコンポーネントの種類に関わらず「自分が置いたもの」として無条件でリストに追加し、絶対にごまかさせない！
+            _activeSpawners.Add(mineObj);
+
+            var mineCtrl = mineObj.GetComponentInChildren<MineController>();
+            var robotBomb = mineObj.GetComponentInChildren<RobotBombController>();
+            var spawnerBox = mineObj.GetComponentInChildren<TankSpawnerBox>();
+
+            if (mineCtrl != null)
             {
                 mineCtrl.Init(tankStatus, tankStatus.GetMineData());
-                tankStatus.OnMinePlaced();
             }
-            else if (mineObj.TryGetComponent(out RobotBombController robotBomb))
+            else if (robotBomb != null)
             {
                 robotBomb.Init(tankStatus, tankStatus.GetMineData());
-                tankStatus.OnMinePlaced();
             }
-            else if (mineObj.TryGetComponent(out TankSpawnerBox spawnerBox))
+            else if (spawnerBox != null)
             {
                 spawnerBox.Init(tankStatus, tankStatus.team);
-                tankStatus.OnMinePlaced();
+
+                // 生まれた戦車を確実に監視下に置く
+                spawnerBox.OnTankSpawned += (spawnedTank) =>
+                {
+                    if (spawnedTank != null) _spawnedTanks.Add(spawnedTank);
+                };
             }
         }
 
-        // ★修正1: スポーンボックスや地雷を置いたときの硬直時間を、通常の弾(shotDelay)より短くする
-        // ボスは設置後すぐに動けるように 0.3秒 に固定
-        yield return new WaitForSeconds(0.3f);
+        // ★硬直時間（確実に動きを止める）
+        yield return new WaitForSeconds(0.5f);
         _isActionRigid = false;
 
-        // ★修正2: 設置した直後、自分が置いたスポナーに引っかからないように、
-        // 直ちに「現在地から離れた安全なランダム地点」を次の目的地として強制的に上書きする
         if (_agent != null && _agent.isOnNavMesh)
         {
             Vector3 awayDir = (transform.position - _moveTarget).normalized;
             if (awayDir == Vector3.zero) awayDir = transform.forward;
-
-            // 設置場所から 4m 以上離れた場所を探す
             Vector3 escapeTarget = transform.position + awayDir * 5.0f + new Vector3(Random.Range(-2f, 2f), 0, Random.Range(-2f, 2f));
 
             if (NavMesh.SamplePosition(escapeTarget, out NavMeshHit hit, 4.0f, NavMesh.AllAreas))
             {
                 _moveTarget = hit.position;
                 _agent.SetDestination(_moveTarget);
-                _moveTimer = 0f; // 移動タイマーをリセットして即座に向かわせる
+                _moveTimer = 0f;
             }
         }
     }
@@ -611,7 +695,6 @@ public class AntennaBossController : MonoBehaviour
     private void HandleTurretAI()
     {
         if (turretTransform == null) return;
-
         Vector3 targetDir = Vector3.forward;
         if (_currentTarget != null)
         {
@@ -644,7 +727,7 @@ public class AntennaBossController : MonoBehaviour
     private void HandleTurretRotation()
     {
         if (turretTransform != null) turretTransform.rotation = _independentTurretRotation;
-        if (CheckShootTrajectory()) TryFire();
+        if (!isDebugMode && CheckShootTrajectory()) TryFire();
     }
 
     private void ThinkTarget()
@@ -700,8 +783,6 @@ public class AntennaBossController : MonoBehaviour
 
     private Vector3 GetRandomStagePoint() => new Vector3(Random.Range(-STAGE_LIMIT, STAGE_LIMIT), 0, Random.Range(-STAGE_LIMIT, STAGE_LIMIT));
     private Vector3 GetFarRandomPoint() { for (int i = 0; i < 10; i++) { Vector3 p = GetRandomStagePoint(); if (Vector3.Distance(transform.position, p) > 10.0f) return p; } return -transform.position; }
-    private int CountAllies() => FindObjectsByType<TankStatus>(FindObjectsSortMode.None).Count(t => t.team == tankStatus.team && t != tankStatus && !t.IsDead);
-    private int CountAlliesNearby(float radius) => Physics.OverlapSphere(transform.position, radius).Select(c => c.GetComponentInParent<TankStatus>()).Count(t => t != null && t.team == tankStatus.team && t != tankStatus && !t.IsDead);
 
     private Vector3 FindSmartRicochetDirection()
     {
@@ -710,7 +791,7 @@ public class AntennaBossController : MonoBehaviour
         if (maxBounces <= 0 || enemyData == null || !enemyData.considerReflection) return Vector3.zero;
 
         Vector3 startPos = firePoint.position;
-        int layerMask = Physics.DefaultRaycastLayers & ~LayerMask.GetMask("Spike") & ~LayerMask.GetMask("Mine") & ~LayerMask.GetMask("Ignore Raycast");
+        int layerMask = Physics.DefaultRaycastLayers & ~LayerMask.GetMask("Spike", "Mine", "Ignore Raycast");
 
         Vector3 baseDir = (_currentTarget.transform.position - startPos).normalized;
         baseDir.y = 0;
@@ -805,15 +886,12 @@ public class AntennaBossController : MonoBehaviour
     }
 }
 
-// ============================================
-// ★ジャミング波の当たり判定と拡大用コンポーネント
-// ============================================
 public class JammingWave : MonoBehaviour
 {
     public float maxRadius = 15f;
     public float expandSpeed = 15f;
     public float stunDuration = 2f;
-    public float berserkBonusSpeed = 5.0f; // ★追加: 暴走速度アップ値を受け取る用
+    public float berserkBonusSpeed = 5.0f;
     public GameObject ownerObj;
 
     private void Update()
@@ -833,15 +911,8 @@ public class JammingWave : MonoBehaviour
         TankStatus tank = other.GetComponentInParent<TankStatus>();
         if (tank != null && tank.gameObject != ownerObj)
         {
-            if (tank.GetData() != null && tank.GetData().isSelfDestruct)
-            {
-                // ★修正: 波から受け取った「速度アップ値」を戦車に渡す
-                tank.ActivateJammingBerserk(berserkBonusSpeed);
-            }
-            else
-            {
-                tank.ApplyJamming(stunDuration);
-            }
+            if (tank.GetData() != null && tank.GetData().isSelfDestruct) tank.ActivateJammingBerserk(berserkBonusSpeed);
+            else tank.ApplyJamming(stunDuration);
         }
     }
 }

@@ -34,6 +34,10 @@ public class ItemController : MonoBehaviour
                 case ItemType.ChangeMine:
                     if (equipmentPrefabToGive != null) status.ChangeMinePrefab(equipmentPrefabToGive);
                     break;
+                case ItemType.ExtraLife:
+                    // ★追加: 落ちている1UPを取った時
+                    if (GameManager.Instance != null) GameManager.Instance.AddPlayerLife();
+                    break;
                 default:
                     // ステータスアップ系はすべて種類を渡すだけで、内部のレベルが上がる
                     status.ApplyPowerUp(itemType);
@@ -43,4 +47,5 @@ public class ItemController : MonoBehaviour
             Destroy(gameObject);
         }
     }
+
 }

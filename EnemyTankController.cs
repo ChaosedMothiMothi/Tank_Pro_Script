@@ -514,7 +514,7 @@ public class EnemyTankController : MonoBehaviour
         }
 
         if (_agent != null && _agent.isOnNavMesh) _agent.nextPosition = _rb.position;
-    }
+    } 
 
     [Tooltip("暴走モード（ジャミング特攻）中の専用移動処理：NavMeshと壁滑りを組み合わせて絶対にスタックせず敵を追う")]
     private void ExecuteBerserkMovement()
@@ -967,6 +967,9 @@ public class EnemyTankController : MonoBehaviour
         int layerMask = Physics.DefaultRaycastLayers & ~LayerMask.GetMask("Spike", "Mine", "Ignore Raycast");
 
         // 砲塔の超近距離（目の前）での誤爆・誤射防止チェック
+        float checkRadius = (enemyData != null) ? enemyData.raycastRadius : 0.25f;
+
+        // 砲塔の超近距離（目の前）での誤爆・誤射防止チェック
         // 砲身の先端から半径0.8mの範囲をスキャンする
         Collider[] closeHits = Physics.OverlapSphere(startPos, 2.0f);
         foreach (var hit in closeHits)
@@ -986,7 +989,7 @@ public class EnemyTankController : MonoBehaviour
                 TankStatus closeTank = hit.GetComponentInParent<TankStatus>();
                 if (closeTank != null && closeTank.team == tankStatus.team && !closeTank.IsDead)
                 {
-                    return false;
+                    return false; // 味方がいるので撃たない
                 }
             }
         }
@@ -1129,8 +1132,18 @@ public class EnemyTankController : MonoBehaviour
             TankStatus hitTank = hit.collider.GetComponentInParent<TankStatus>();
             if (hitTank != null)
             {
-                // 敵ならTrue（射撃実行）、味方ならFalse（射撃中止）
-                return hitTank.team != tankStatus.team;
+                if (hitTank.team == tankStatus.team)
+                {
+                    // 味方意識ONなら「味方に当たるから撃たない(false)」
+                    // 味方意識OFFなら「味方ごと撃ち抜くつもりなので、これ以上先は調べずに撃つ(true)」
+                    if (enemyData != null && enemyData.isTeamAware) return false;
+                    else return true;
+                }
+                else
+                {
+                    // 敵に当たる場合は撃つ
+                    return true;
+                }
             }
         }
         return false;
@@ -1188,7 +1201,9 @@ public class EnemyTankController : MonoBehaviour
         }
     }
 
-    // パーツを生成し、指定したターゲットへ向けてマグネット化するヘルパー関数
+    // ==========================================
+    // ★修正: FF（同士討ち）でマグネット無効の時は、飛び散る勢いを極端に弱くしてその場に落とす
+    // ==========================================
     private void SpawnAndMagnetParts(GameObject prefab, int count, TankStatus targetPlayer)
     {
         for (int i = 0; i < count; i++)
@@ -1199,15 +1214,22 @@ public class EnemyTankController : MonoBehaviour
             Rigidbody rb = partObj.GetComponent<Rigidbody>();
             if (rb == null) rb = partObj.AddComponent<Rigidbody>();
 
-            Vector3 force = Vector3.up * 2.5f + Random.insideUnitSphere * 1.5f;
-            rb.AddForce(force, ForceMode.Impulse);
-            rb.AddTorque(Random.insideUnitSphere * 50f, ForceMode.Impulse);
-
-            // アイテムボックスではなく敵からのドロップなので、必ず自動獲得（マグネット化）させる
             if (targetPlayer != null)
             {
+                // 通常時（プレイヤーが倒した時）：プレイヤーに向かってマグネット化させるため、大きく散らす
+                Vector3 force = Vector3.up * 2.5f + Random.insideUnitSphere * 1.5f;
+                rb.AddForce(force, ForceMode.Impulse);
+                rb.AddTorque(Random.insideUnitSphere * 50f, ForceMode.Impulse);
+
                 PartsItemController pic = partObj.GetComponent<PartsItemController>();
                 if (pic != null) pic.StartMagneticEffect(targetPlayer);
+            }
+            else
+            {
+                // ★FF時（同士討ち）：マグネットで回収されないため、ステージ外に飛んでいかないよう勢いを最小限にする
+                Vector3 force = Vector3.up * 1.0f + Random.insideUnitSphere * 0.5f; // 飛び散る力を激減
+                rb.AddForce(force, ForceMode.Impulse);
+                rb.AddTorque(Random.insideUnitSphere * 10f, ForceMode.Impulse);
             }
         }
     }

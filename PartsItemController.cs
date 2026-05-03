@@ -20,7 +20,7 @@ public class PartsItemController : MonoBehaviour
         if (_isMagnetActive && _magnetTarget != null && !_magnetTarget.IsDead)
         {
             // プレイヤーに向けて高速で吸い込まれる
-            transform.position = Vector3.MoveTowards(transform.position, _magnetTarget.transform.position + Vector3.up, Time.deltaTime * 30f);
+            transform.position = Vector3.MoveTowards(transform.position, _magnetTarget.transform.position + Vector3.up, Time.deltaTime * 90f);
 
             // 距離が近くなったら強制的に獲得
             if (Vector3.Distance(transform.position, _magnetTarget.transform.position + Vector3.up) < 1.0f)

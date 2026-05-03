@@ -5,8 +5,9 @@ using System.Collections.Generic;
 public class MineController : MonoBehaviour
 {
     public MineData mineData;
-    private TankStatus _ownerStatus;
-    private bool _isExploded = false;
+    protected TankStatus _ownerStatus;
+    protected bool _isExploded = false;
+
 
     private Renderer[] _renderers;
     private Color _warningColor = new Color(3.0f, 0.5f, 0.0f);
@@ -112,9 +113,17 @@ target.gameObject.layer == LayerMask.NameToLayer("Explode"))
         Destroy(gameObject);
     }
 
-    private void ApplyExplosionDamage()
+    // ★修正: Sマインで「爆風ダメージの代わりに弾を発射する」ための上書きを許可（virtualを追加）
+    protected virtual void ApplyExplosionDamage()
     {
         if (mineData == null) return;
+
+        // ★修正: アイテムのバフ効果（上昇分）を適用した最終ダメージを計算する
+        int totalDamage = mineData.damage;
+        if (_ownerStatus != null)
+        {
+            totalDamage = _ownerStatus.GetTotalMineDamage(mineData.damage);
+        }
 
         Collider[] hitColliders = Physics.OverlapSphere(transform.position, mineData.explosionRadius);
         List<TankStatus> damagedTanks = new List<TankStatus>();
@@ -123,19 +132,19 @@ target.gameObject.layer == LayerMask.NameToLayer("Explode"))
         {
             if (hit.gameObject == gameObject) continue;
 
-            // ★追加: アイテムボックスへの爆風ダメージ
             ItemBoxController itemBox = hit.GetComponent<ItemBoxController>();
-            if (itemBox != null) itemBox.TakeDamage(mineData.damage, _ownerStatus);
+            // ★修正: mineData.damage ではなくバフ込みの totalDamage を与える
+            if (itemBox != null) itemBox.TakeDamage(totalDamage, _ownerStatus);
 
             TankStatus tank = hit.GetComponentInParent<TankStatus>();
             if (tank != null && !damagedTanks.Contains(tank))
             {
-                tank.TakeDamage(mineData.damage, _ownerStatus);
+                tank.TakeDamage(totalDamage, _ownerStatus);
                 damagedTanks.Add(tank);
             }
 
             DestructibleBlock block = hit.GetComponent<DestructibleBlock>();
-            if (block != null) block.TakeDamage(mineData.damage);
+            if (block != null) block.TakeDamage(totalDamage);
 
             if (hit.CompareTag("Mine"))
             {

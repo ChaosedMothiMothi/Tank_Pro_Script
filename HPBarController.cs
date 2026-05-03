@@ -91,4 +91,5 @@ public class HPBarController : MonoBehaviour
         yield return new WaitForSeconds(0.5f);
         Destroy(gameObject);
     }
+
 }
