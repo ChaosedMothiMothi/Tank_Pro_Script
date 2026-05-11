@@ -91,6 +91,7 @@ target.gameObject.layer == LayerMask.NameToLayer("Explode"))
 
     public void Explode()
     {
+        EffectManager.Instance.ShakeMedium();
         if (_isExploded) return;
         _isExploded = true;
 

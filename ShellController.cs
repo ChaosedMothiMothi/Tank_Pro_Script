@@ -16,6 +16,10 @@ public class ShellController : MonoBehaviour
     // ★追加: 現在の速度を保持する変数（跳弾時に速度低下しないため）
     private float _currentSpeed;
 
+    // ★追加: 切り離したいパーティクルをインスペクターで登録するリスト
+    [Header("Trail Settings")]
+    public List<ParticleSystem> trailParticles = new List<ParticleSystem>();
+
     private void Awake()
     {
         _rb = GetComponent<Rigidbody>();
@@ -48,7 +52,7 @@ public class ShellController : MonoBehaviour
         int insideLayerMask = LayerMask.GetMask("Inside");
         if (insideLayerMask != 0 && Physics.CheckSphere(transform.position, 0.1f, insideLayerMask))
         {
-            Destroy(gameObject);
+            HandleDestruction(null); // ★修正: 直接Destroyせず共通処理へ
             _isExploded = true;
             return;
         }
@@ -57,7 +61,7 @@ public class ShellController : MonoBehaviour
         {
             if (hit.CompareTag("Inside"))
             {
-                Destroy(gameObject);
+                HandleDestruction(null); // ★修正: 直接Destroyせず共通処理へ
                 _isExploded = true;
                 return;
             }
@@ -98,7 +102,13 @@ public class ShellController : MonoBehaviour
         {
             DebugVisualizer.Instance.CreateVisualizer(transform, shellData.explosionRadius);
         }
-        Destroy(gameObject, shellData.lifeTime);
+        // ★修正: 自然消滅時もパーティクルを分離させるため、Invokeを使用
+        Invoke(nameof(AutoDestroy), shellData.lifeTime);
+    }
+
+    private void AutoDestroy()
+    {
+        HandleDestruction(null);
     }
 
     // ==========================================
@@ -172,6 +182,10 @@ public class ShellController : MonoBehaviour
     public void TriggerExplosionReaction()
     {
         if (_isExploded) return;
+
+        // ★重要: Destroy前にパーティクルを分離
+        DetachAndStopParticles();
+
         _isExploded = true;
         if (shellData.isExplosive)
         {
@@ -187,6 +201,10 @@ public class ShellController : MonoBehaviour
     private void HandleDestruction(Collision collision)
     {
         if (_isExploded) return;
+
+        // ★重要: Destroy前にパーティクルを分離
+        DetachAndStopParticles();
+
         _isExploded = true;
         if (EffectManager.Instance != null)
         {
@@ -253,4 +271,22 @@ public class ShellController : MonoBehaviour
             if (hit.CompareTag("Mine")) hit.GetComponentInParent<MineController>()?.Explode();
         }
     }
+
+    // ★追加: パーティクルを親から切り離して放出を止めるメソッド
+    private void DetachAndStopParticles()
+    {
+        foreach (var ps in trailParticles)
+        {
+            if (ps != null)
+            {
+                ps.transform.parent = null; // 親子関係を解除
+                ps.Stop();                  // 新規放出を停止
+
+                // 放出済みの粒子が消えたら自動でGameObjectが消えるようにする設定（推奨）
+                // または、ここで一定時間後に消去する
+                Destroy(ps.gameObject, ps.main.duration + ps.main.startLifetime.constantMax);
+            }
+        }
+    }
+
 }

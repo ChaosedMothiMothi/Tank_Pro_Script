@@ -300,6 +300,7 @@ public class TankStatus : MonoBehaviour
 
         IsDead = true;
         if (GameManager.Instance != null) GameManager.Instance.OnTankDead(this);
+        EffectManager.Instance.ShakeSmall();
 
         if (GlobalGameManager.Instance != null && team != TeamType.Blue && spawnIndex >= 0)
         {

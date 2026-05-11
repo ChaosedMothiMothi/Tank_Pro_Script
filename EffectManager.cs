@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections; // コルーチンに必要
 
 public class EffectManager : MonoBehaviour
 {
@@ -33,6 +34,23 @@ public class EffectManager : MonoBehaviour
     [SerializeField] private AudioClip RefrectSound;
 
     private AudioSource audioSource;
+    private Coroutine shakeCoroutine;
+    private Vector3 originalCameraPos;
+
+    // --- 追加: 画面シェイク設定 ---
+    [Header("Camera Shake Settings")]
+    [SerializeField] private Transform cameraTransform; // 揺らしたいカメラのTransform
+
+    [System.Serializable]
+    public struct ShakeParameters
+    {
+        public float duration;  // 揺れる時間
+        public float magnitude; // 揺れの強さ
+    }
+
+    [SerializeField] private ShakeParameters shakeSmall = new ShakeParameters { duration = 0.1f, magnitude = 0.05f };
+    [SerializeField] private ShakeParameters shakeMedium = new ShakeParameters { duration = 0.2f, magnitude = 0.15f };
+    [SerializeField] private ShakeParameters shakeLarge = new ShakeParameters { duration = 0.4f, magnitude = 0.3f };
 
     private void Awake()
     {
@@ -50,6 +68,12 @@ public class EffectManager : MonoBehaviour
         if (audioSource == null)
         {
             audioSource = gameObject.AddComponent<AudioSource>();
+        }
+
+        // カメラが指定されていない場合はメインカメラを取得
+        if (cameraTransform == null && Camera.main != null)
+        {
+            cameraTransform = Camera.main.transform;
         }
     }
 
@@ -124,6 +148,46 @@ public class EffectManager : MonoBehaviour
     public void RefrectionSound()
     {
         audioSource.PlayOneShot(RefrectSound);
+    }
+
+    // --- 追加: シェイク実行用関数 ---
+
+    public void ShakeSmall() => StartShake(shakeSmall);
+    public void ShakeMedium() => StartShake(shakeMedium);
+    public void ShakeLarge() => StartShake(shakeLarge);
+
+    private void StartShake(ShakeParameters paramsSet)
+    {
+        if (cameraTransform == null) return;
+
+        // すでにシェイク中の場合は一旦止めてリセット
+        if (shakeCoroutine != null)
+        {
+            StopCoroutine(shakeCoroutine);
+            cameraTransform.localPosition = originalCameraPos;
+        }
+
+        shakeCoroutine = StartCoroutine(ShakeProcess(paramsSet.duration, paramsSet.magnitude));
+    }
+
+    private IEnumerator ShakeProcess(float duration, float magnitude)
+    {
+        originalCameraPos = cameraTransform.localPosition;
+        float elapsed = 0.0f;
+
+        while (elapsed < duration)
+        {
+            float x = Random.Range(-1f, 1f) * magnitude;
+            float y = Random.Range(-1f, 1f) * magnitude;
+
+            cameraTransform.localPosition = originalCameraPos + new Vector3(x, y, 0);
+
+            elapsed += Time.deltaTime;
+            yield return null; // 次のフレームまで待機
+        }
+
+        cameraTransform.localPosition = originalCameraPos;
+        shakeCoroutine = null;
     }
 
 }

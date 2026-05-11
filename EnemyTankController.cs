@@ -91,6 +91,44 @@ public class EnemyTankController : MonoBehaviour
         // ★修正①: ゲーム開始時に最大弾数をセット（プレイヤーと同じ挙動）
         _currentAmmoCount = tankStatus.GetTotalMaxAmmo();
 
+        // ==========================================
+        // 【ここから追加】サイズに合わせたスポーン位置の自動調整
+        // ==========================================
+        if (UnityEngine.AI.NavMesh.SamplePosition(transform.position, out UnityEngine.AI.NavMeshHit navHit, 10.0f, UnityEngine.AI.NavMesh.AllAreas))
+        {
+            float offsetY = 0f;
+
+            // 視界センサー等（isTrigger）を除外した、一番下の物理コライダーの底面を探す
+            Collider[] cols = GetComponentsInChildren<Collider>();
+            float minColY = float.MaxValue;
+            bool foundCol = false;
+
+            foreach (var c in cols)
+            {
+                if (!c.isTrigger)
+                {
+                    if (c.bounds.min.y < minColY) minColY = c.bounds.min.y;
+                    foundCol = true;
+                }
+            }
+
+            if (foundCol)
+            {
+                // 「現在の中心点(原点)」から「コライダーの底面」までの距離をオフセットとする
+                offsetY = transform.position.y - minColY;
+            }
+
+            // NavMeshの床の高さ ＋ オフセット ＋ わずかな隙間(0.05f) でめり込みを防止
+            Vector3 groundPos = new Vector3(transform.position.x, navHit.position.y + offsetY + 0.05f, transform.position.z);
+            transform.position = groundPos;
+
+            // NavMeshAgentを新しい位置に同期
+            if (_agent != null && _agent.enabled)
+            {
+                _agent.Warp(groundPos);
+            }
+        }
+
         // 初期ターゲット設定
         DecideNextMoveTarget();
 
