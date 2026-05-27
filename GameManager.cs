@@ -24,9 +24,6 @@ public class GameManager : MonoBehaviour
     [SerializeField] private ResultUIManager resultUIManager;
     [SerializeField] private TMPro.TextMeshProUGUI startText;
 
-    // ★修正: 元々あったパーツ専用のテキスト(partsText)を削除しました。
-    // 代わりに下の「simpleModeStatusText」1つだけで残機とパーツ数を両方表示させます。
-
     [Header("Drop Settings")]
     public GameObject defaultPartsItemPrefab;
 
@@ -37,13 +34,15 @@ public class GameManager : MonoBehaviour
 
     private List<TankStatus> _allTanks = new List<TankStatus>();
     private TankStatus _playerTank;
-
-    // フェード用の画像参照変数
     private UnityEngine.UI.Image _fadeImage;
 
     [Header("Simple Mode UI Settings")]
     [Tooltip("シンプルモード用の「残機・パーツ数」を表示するテキストUIをアタッチしてください")]
     public TMPro.TextMeshProUGUI simpleModeStatusText;
+
+    // ★追加: 生存(Survival)モード用の変数
+    private bool _isSurvivalMode = false;
+    private float _survivalTimer = 0f;
 
     private void Awake()
     {
@@ -67,14 +66,42 @@ public class GameManager : MonoBehaviour
             RegisterTank(tank);
         }
 
-        // フェードインとゲーム開始カウントダウン
+        // ★追加: ステージデータからクリア条件を読み込み、Survivalならタイマーをセット
+        if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.SelectedStage != null)
+        {
+            var stageData = GlobalGameManager.Instance.SelectedStage;
+            if (stageData.clearCondition == StageData.ClearConditionType.Survival)
+            {
+                _isSurvivalMode = true;
+                _survivalTimer = stageData.survivalTime;
+            }
+        }
+
         StartCoroutine(FadeInRoutine());
         StartCoroutine(GameStartRoutine());
 
-        // アタッチされたUIのテキストを初回更新する
         if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.isSimpleMode)
         {
             UpdateSimpleModeUI();
+        }
+    }
+
+    // ★追加: 生存タイマーの更新
+    private void Update()
+    {
+        if (!IsGameStarted || IsFinished) return;
+
+        if (_isSurvivalMode)
+        {
+            _survivalTimer -= Time.deltaTime;
+
+            // 残り時間をUIに表示したい場合はここで更新（とりあえず既存のUIの下に追加しています）
+            UpdateSimpleModeUI();
+
+            if (_survivalTimer <= 0f)
+            {
+                ForceWin(); // 時間が来たら勝利！
+            }
         }
     }
 
@@ -93,7 +120,6 @@ public class GameManager : MonoBehaviour
             yield break;
         }
 
-        // プレイヤーが生成されるのを少しだけ待つ
         float waitTimer = 0f;
         while (_playerTank == null && waitTimer < 1.0f)
         {
@@ -182,16 +208,24 @@ public class GameManager : MonoBehaviour
     {
         if (IsFinished) return;
 
-        // ★修正: deadTank が _playerTank かつ team == Blue の場合のみ敗北
+        // プレイヤー自身が倒された場合は敗北（生存モードでも無効化ステージでなければ負け）
         if (deadTank == _playerTank && deadTank.team == TeamType.Blue)
         {
             FinishGame(false);
             return;
         }
 
-        // 赤チームの敵が倒された場合
         if (deadTank.team == TeamType.Red)
         {
+            // ★追加: クリア条件が「敵全滅(Annihilation)」以外の場合は、敵を倒しきっても無視する
+            if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.SelectedStage != null)
+            {
+                if (GlobalGameManager.Instance.SelectedStage.clearCondition != StageData.ClearConditionType.Annihilation)
+                {
+                    return; // 全滅させてもクリアにならない
+                }
+            }
+
             bool hasBossOrCaptain = false;
             bool bossOrCaptainAlive = false;
             int redCount = 0;
@@ -217,6 +251,21 @@ public class GameManager : MonoBehaviour
             else
             {
                 if (redCount == 0) FinishGame(true);
+            }
+        }
+    }
+
+    // ★追加: ゴール（ReachDestination）用プレハブから呼ばれるクリア用メソッド
+    public void OnReachDestination()
+    {
+        if (IsFinished) return;
+
+        // クリア条件が「指定箇所到達」になっている時だけクリアを許可する
+        if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.SelectedStage != null)
+        {
+            if (GlobalGameManager.Instance.SelectedStage.clearCondition == StageData.ClearConditionType.ReachDestination)
+            {
+                FinishGame(true);
             }
         }
     }
@@ -250,7 +299,6 @@ public class GameManager : MonoBehaviour
             }
         }
 
-        // シンプルモードの敗北時や、通常モードの場合はリザルト画面を表示
         if (resultUIManager != null) resultUIManager.ShowResult(isWin);
     }
 
@@ -389,7 +437,9 @@ public class GameManager : MonoBehaviour
 
         if (simpleModeStatusText != null)
         {
-            simpleModeStatusText.text = $"LIVES: {GlobalGameManager.Instance.playerLives}\nPARTS: {CurrentParts}";
+            // ★修正: 生存モードの場合は残り時間も追記して表示する
+            string extraInfo = _isSurvivalMode ? $"\nTIME: {Mathf.CeilToInt(_survivalTimer)}" : "";
+            simpleModeStatusText.text = $"LIVES: {GlobalGameManager.Instance.playerLives}\nPARTS: {CurrentParts}{extraInfo}";
         }
     }
 

@@ -86,10 +86,12 @@ public class ItemBoxController : MonoBehaviour
         if (categoryRoll < partsWeight)
         {
             GameObject partsPrefab = partsPrefabOverride;
+            // 1. ここで override も GameManager からの取得も null になると何も起きない
             if (partsPrefab == null && GameManager.Instance != null) partsPrefab = GameManager.Instance.GetPartsItemPrefab();
 
             if (partsPrefab != null)
             {
+                // 2. インスペクターで partsDropCount が 0 になっていませんか？
                 for (int i = 0; i < partsDropCount; i++)
                 {
                     GameObject obj = Instantiate(partsPrefab, transform.position + Vector3.up * 0.5f, Quaternion.identity);

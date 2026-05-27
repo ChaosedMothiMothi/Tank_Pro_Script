@@ -12,8 +12,19 @@ public class TankSpawnerBox : MonoBehaviour
     [System.Serializable]
     public class SpawnEntry
     {
+        public enum SpawnType
+        {
+            Tank,
+            Item,
+            DisadvantageItem
+        }
+
+        [Tooltip("出現タイプ")]
+        public SpawnType spawnType = SpawnType.Tank;
+
         [Tooltip("出現させるプレハブ")]
         public GameObject prefab;
+
         [Tooltip("出現する確率の重み（大きいほど出やすい）")]
         public int weight = 10;
     }
@@ -37,8 +48,14 @@ public class TankSpawnerBox : MonoBehaviour
     [Tooltip("展開させる中身の候補リスト（重み付きでランダムに選ばれます）")]
     public List<SpawnEntry> entitiesToSpawn;
 
+    [Header("Item Limit Settings")]
+    [Tooltip("このボックス経由で出現できるアイテムの最大数（戦車は含まない）")]
+    public int maxSpawnedItems = 5;
+
+    private static Queue<GameObject> _spawnedItemQueue = new Queue<GameObject>();
+
     // ★追加: 実際に選ばれたプレハブを記憶しておく変数
-    private GameObject _selectedPrefab;
+    private SpawnEntry _selectedEntry;
     private TankStatus _owner;
     private TeamType _team;
     private bool _isProcessed = false;
@@ -84,7 +101,8 @@ public class TankSpawnerBox : MonoBehaviour
 
         if (_owner != null)
         {
-            Collider[] ownerColliders = _owner.GetComponentsInChildren<Collider>();
+            // ★修正: 本体(TankStatus)だけでなく、そこから繋がっている親や兄弟（牽引ボスのリーダー側など）の全コライダーを取得する
+            Collider[] ownerColliders = _owner.transform.root.GetComponentsInChildren<Collider>();
 
             if (myColliders != null && myColliders.Length > 0 && ownerColliders != null)
             {
@@ -99,8 +117,8 @@ public class TankSpawnerBox : MonoBehaviour
             StartCoroutine(RestoreCollisionRoutine(myColliders, ownerColliders));
         }
 
-        // ★追加: ボックスが設置された瞬間に、中身をランダムに決定する
-        _selectedPrefab = GetRandomPrefab();
+        // ボックスが設置された瞬間に、中身をランダムに決定する
+        _selectedEntry = GetRandomEntry();
 
         CreateDummyVisual();
         StartCoroutine(SpawnRoutine());
@@ -117,23 +135,31 @@ public class TankSpawnerBox : MonoBehaviour
     }
 
     // ★追加: 重みを考慮してリストからランダムにプレハブを選ぶメソッド
-    private GameObject GetRandomPrefab()
+    private SpawnEntry GetRandomEntry()
     {
         if (entitiesToSpawn == null || entitiesToSpawn.Count == 0) return null;
 
         int totalWeight = 0;
-        foreach (var entry in entitiesToSpawn) totalWeight += entry.weight;
+        foreach (var entry in entitiesToSpawn)
+        {
+            if (entry != null && entry.prefab != null)
+                totalWeight += entry.weight;
+        }
+
+        if (totalWeight <= 0) return null;
 
         int randomValue = Random.Range(0, totalWeight);
         int currentWeight = 0;
 
         foreach (var entry in entitiesToSpawn)
         {
+            if (entry == null || entry.prefab == null) continue;
+
             currentWeight += entry.weight;
-            if (randomValue < currentWeight) return entry.prefab;
+            if (randomValue < currentWeight) return entry;
         }
 
-        return entitiesToSpawn[0].prefab; // 安全対策
+        return null;
     }
 
     // ★追加: 箱が破壊された（展開失敗した）時の処理
@@ -158,10 +184,10 @@ public class TankSpawnerBox : MonoBehaviour
     private void CreateDummyVisual()
     {
         // ★修正: ランダムで選ばれたプレハブ (_selectedPrefab) を使う
-        if (_selectedPrefab == null) return;
+        if (_selectedEntry == null || _selectedEntry.prefab == null) return;
 
         Vector3 spawnPos = transform.position + Vector3.up * spawnOffsetY;
-        _dummyVisual = Instantiate(_selectedPrefab, spawnPos, transform.rotation, transform);
+        _dummyVisual = Instantiate(_selectedEntry.prefab, spawnPos, transform.rotation, transform);
         _dummyVisual.transform.localScale = Vector3.one * 0.4f;
 
         foreach (var mb in _dummyVisual.GetComponentsInChildren<MonoBehaviour>()) mb.enabled = false;
@@ -231,40 +257,46 @@ public class TankSpawnerBox : MonoBehaviour
         ScatterChildParts();
 
         // ★修正: _selectedPrefab から実体を生成する
-        if (_selectedPrefab != null)
+        if (_selectedEntry != null && _selectedEntry.prefab != null)
         {
             Vector3 spawnPos = transform.position + Vector3.up * spawnOffsetY;
-            GameObject spawnedObj = Instantiate(_selectedPrefab, spawnPos, transform.rotation);
+            GameObject spawnedObj = Instantiate(_selectedEntry.prefab, spawnPos, transform.rotation);
 
-            TankStatus spawnedTank = spawnedObj.GetComponentInChildren<TankStatus>();
-            if (spawnedTank != null)
+            if (_selectedEntry.spawnType == SpawnEntry.SpawnType.Tank)
             {
-                spawnedTank.SetTeam(_team, false, false, -1);
-                EnemyTankController enemyCtrl = spawnedObj.GetComponentInChildren<EnemyTankController>();
-                if (enemyCtrl != null) enemyCtrl.SetDropPartsCount(0);
+                TankStatus spawnedTank = spawnedObj.GetComponentInChildren<TankStatus>();
+                if (spawnedTank != null)
+                {
+                    spawnedTank.SetTeam(_team, false, false, -1);
 
-                spawnedTank.ApplyStun(0.5f);
+                    EnemyTankController enemyCtrl = spawnedObj.GetComponentInChildren<EnemyTankController>();
+                    if (enemyCtrl != null) enemyCtrl.SetDropPartsCount(0);
 
-                // 生まれた戦車をボスに通知
-                OnTankSpawned?.Invoke(spawnedTank);
+                    spawnedTank.ApplyStun(0.5f);
+                    OnTankSpawned?.Invoke(spawnedTank);
+                }
             }
             else
             {
+                RegisterSpawnedItem(spawnedObj);
+
                 MineController mine = spawnedObj.GetComponentInChildren<MineController>();
-                if (mine != null && _owner != null) mine.Init(_owner, _owner.GetMineData());
+                if (mine != null && _owner != null)
+                {
+                    mine.Init(_owner, _owner.GetMineData());
+                }
                 else
                 {
                     RobotBombController robot = spawnedObj.GetComponentInChildren<RobotBombController>();
-                    if (robot != null && _owner != null) robot.Init(_owner, _owner.GetMineData());
+                    if (robot != null && _owner != null)
+                    {
+                        robot.Init(_owner, _owner.GetMineData());
+                    }
                 }
             }
 
             yield return StartCoroutine(PopOutScaleRoutine(spawnedObj.transform));
         }
-
-        if (_owner != null) _owner.OnMineRemoved();
-
-        Destroy(gameObject);
     }
 
     private void ScatterChildParts()
@@ -386,6 +418,22 @@ public class TankSpawnerBox : MonoBehaviour
         if (_currentBoxHp <= 0)
         {
             BreakBox();
+        }
+    }
+
+    private void RegisterSpawnedItem(GameObject itemObj)
+    {
+        if (itemObj == null) return;
+
+        _spawnedItemQueue.Enqueue(itemObj);
+
+        while (_spawnedItemQueue.Count > maxSpawnedItems)
+        {
+            GameObject oldest = _spawnedItemQueue.Dequeue();
+            if (oldest != null)
+            {
+                Destroy(oldest);
+            }
         }
     }
 }

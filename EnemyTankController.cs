@@ -35,6 +35,8 @@ public class EnemyTankController : MonoBehaviour
     // --- 砲塔・攻撃制御 ---
     private float _turretNoiseTime;
     private Quaternion _independentTurretRotation;
+    [Tooltip("マズルフラッシュの発生位置（未設定の場合は firePoint を使用）")]
+    public Transform muzzleFlashPoint; // ★追加
 
     [Tooltip("硬直状態（攻撃中や地雷設置中など）を判定するフラグ")]
     private bool _isActionRigid = false;
@@ -918,7 +920,10 @@ public class EnemyTankController : MonoBehaviour
 
         if (tankStatus.GetShellPrefab() != null && firePoint != null)
         {
-            if (EffectManager.Instance != null) EffectManager.Instance.PlayMuzzleFlash(firePoint);
+            // ★修正: muzzleFlashPoint が設定されていればそれを使い、なければ firePoint を使う
+            Transform flashPoint = muzzleFlashPoint != null ? muzzleFlashPoint : firePoint;
+            if (EffectManager.Instance != null) EffectManager.Instance.PlayMuzzleFlash(flashPoint);
+
             GameObject shellObj = Instantiate(tankStatus.GetShellPrefab(), firePoint.position, firePoint.rotation);
             EffectManager.Instance.ShotSound();
 
@@ -1190,52 +1195,55 @@ public class EnemyTankController : MonoBehaviour
     [Tooltip("死亡時にパーツをばらまく（倒したプレイヤーに自動で吸い込まれるが、FF時はその場に落ちる）")]
     private void DropParts()
     {
-        if (_partsDropCount <= 0 || GameManager.Instance == null) return;
-
-        GameObject prefab = GameManager.Instance.GetPartsItemPrefab();
-        if (prefab == null) return;
-
-        var survivingPlayers = FindObjectsByType<TankStatus>(FindObjectsSortMode.None)
-            .Where(t => t.team == TeamType.Blue && !t.IsDead)
-            .ToList();
-
-        TankStatus targetPlayer = tankStatus.LastAttacker;
-
-        // ★追加: フレンドリーファイア（敵同士の同士討ち）の判定
-        bool isFriendlyFire = false;
-        if (targetPlayer != null && targetPlayer.team != TeamType.Blue)
+        if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.isSimpleMode)
         {
-            isFriendlyFire = true;
-        }
+            if (_partsDropCount <= 0 || GameManager.Instance == null) return;
 
-        bool isBoss = (enemyData != null && enemyData.isBossDrop);
+            GameObject prefab = GameManager.Instance.GetPartsItemPrefab();
+            if (prefab == null) return;
 
-        if (isFriendlyFire)
-        {
-            // 【FF用】誰にも吸い込ませず、その場に散らばるだけにする（targetPlayerをnullにして渡す）
-            SpawnAndMagnetParts(prefab, _partsDropCount, null);
-        }
-        else if (isBoss)
-        {
-            // 【ボス用】生存しているプレイヤー全員に配る
-            int survivingCount = survivingPlayers.Count;
-            if (survivingCount == 0) return;
-            int partsPerPlayer = Mathf.Max(0, _partsDropCount + 1 - survivingCount);
+            var survivingPlayers = FindObjectsByType<TankStatus>(FindObjectsSortMode.None)
+                .Where(t => t.team == TeamType.Blue && !t.IsDead)
+                .ToList();
 
-            foreach (var player in survivingPlayers)
+            TankStatus targetPlayer = tankStatus.LastAttacker;
+
+            // ★追加: フレンドリーファイア（敵同士の同士討ち）の判定
+            bool isFriendlyFire = false;
+            if (targetPlayer != null && targetPlayer.team != TeamType.Blue)
             {
-                SpawnAndMagnetParts(prefab, partsPerPlayer, player);
-            }
-        }
-        else
-        {
-            // 【通常用】ラストアタックを行ったプレイヤーに配る
-            if (targetPlayer == null || targetPlayer.IsDead || targetPlayer.team != TeamType.Blue)
-            {
-                targetPlayer = survivingPlayers.OrderBy(t => Vector3.Distance(transform.position, t.transform.position)).FirstOrDefault();
+                isFriendlyFire = true;
             }
 
-            SpawnAndMagnetParts(prefab, _partsDropCount, targetPlayer);
+            bool isBoss = (enemyData != null && enemyData.isBossDrop);
+
+            if (isFriendlyFire)
+            {
+                // 【FF用】誰にも吸い込ませず、その場に散らばるだけにする（targetPlayerをnullにして渡す）
+                SpawnAndMagnetParts(prefab, _partsDropCount, null);
+            }
+            else if (isBoss)
+            {
+                // 【ボス用】生存しているプレイヤー全員に配る
+                int survivingCount = survivingPlayers.Count;
+                if (survivingCount == 0) return;
+                int partsPerPlayer = Mathf.Max(0, _partsDropCount + 1 - survivingCount);
+
+                foreach (var player in survivingPlayers)
+                {
+                    SpawnAndMagnetParts(prefab, partsPerPlayer, player);
+                }
+            }
+            else
+            {
+                // 【通常用】ラストアタックを行ったプレイヤーに配る
+                if (targetPlayer == null || targetPlayer.IsDead || targetPlayer.team != TeamType.Blue)
+                {
+                    targetPlayer = survivingPlayers.OrderBy(t => Vector3.Distance(transform.position, t.transform.position)).FirstOrDefault();
+                }
+
+                SpawnAndMagnetParts(prefab, _partsDropCount, targetPlayer);
+            }
         }
     }
 
@@ -1265,7 +1273,7 @@ public class EnemyTankController : MonoBehaviour
             else
             {
                 // ★FF時（同士討ち）：マグネットで回収されないため、ステージ外に飛んでいかないよう勢いを最小限にする
-                Vector3 force = Vector3.up * 1.0f + Random.insideUnitSphere * 0.5f; // 飛び散る力を激減
+                Vector3 force = Vector3.up * 0.5f + Random.insideUnitSphere * 0.5f; // 飛び散る力を激減
                 rb.AddForce(force, ForceMode.Impulse);
                 rb.AddTorque(Random.insideUnitSphere * 10f, ForceMode.Impulse);
             }

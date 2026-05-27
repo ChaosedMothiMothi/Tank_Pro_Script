@@ -76,14 +76,22 @@ public class MineController : MonoBehaviour
         if (target.CompareTag("Tank"))
         {
             TankStatus targetTank = target.GetComponentInParent<TankStatus>();
+
+            // ★修正: 踏んだのが「牽引ボスの大型個体」だった場合、本体のTankStatusを取得する
+            if (targetTank == null)
+            {
+                DamageForwarder forwarder = target.GetComponentInParent<DamageForwarder>();
+                if (forwarder != null) targetTank = forwarder.mainTankStatus;
+            }
+
             if (_ownerStatus != null && targetTank != null)
             {
-                if (targetTank.team == _ownerStatus.team) return;
+                if (targetTank.team == _ownerStatus.team) return; // 味方なら起爆しない
             }
             Explode();
         }
         else if (target.CompareTag("Shell") || target.CompareTag("Explosion") ||
-target.gameObject.layer == LayerMask.NameToLayer("Explode"))
+                 target.gameObject.layer == LayerMask.NameToLayer("Explode"))
         {
             Explode();
         }
@@ -114,12 +122,10 @@ target.gameObject.layer == LayerMask.NameToLayer("Explode"))
         Destroy(gameObject);
     }
 
-    // ★修正: Sマインで「爆風ダメージの代わりに弾を発射する」ための上書きを許可（virtualを追加）
     protected virtual void ApplyExplosionDamage()
     {
         if (mineData == null) return;
 
-        // ★修正: アイテムのバフ効果（上昇分）を適用した最終ダメージを計算する
         int totalDamage = mineData.damage;
         if (_ownerStatus != null)
         {
@@ -134,10 +140,17 @@ target.gameObject.layer == LayerMask.NameToLayer("Explode"))
             if (hit.gameObject == gameObject) continue;
 
             ItemBoxController itemBox = hit.GetComponent<ItemBoxController>();
-            // ★修正: mineData.damage ではなくバフ込みの totalDamage を与える
             if (itemBox != null) itemBox.TakeDamage(totalDamage, _ownerStatus);
 
             TankStatus tank = hit.GetComponentInParent<TankStatus>();
+
+            // ★修正: 爆風が当たったのが「牽引ボスの大型個体」だった場合、本体にダメージを流す
+            if (tank == null)
+            {
+                DamageForwarder forwarder = hit.GetComponentInParent<DamageForwarder>();
+                if (forwarder != null) tank = forwarder.mainTankStatus;
+            }
+
             if (tank != null && !damagedTanks.Contains(tank))
             {
                 tank.TakeDamage(totalDamage, _ownerStatus);

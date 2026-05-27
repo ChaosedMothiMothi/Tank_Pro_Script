@@ -22,12 +22,12 @@ public class ClearArea : MonoBehaviour
                 }
                 else
                 {
-                    if (GameManager.Instance != null) GameManager.Instance.ForceWin();
+                    GameManager.Instance.OnReachDestination();
                 }
             }
             else
             {
-                if (GameManager.Instance != null) GameManager.Instance.ForceWin();
+                if (GameManager.Instance != null) GameManager.Instance.OnReachDestination();
             }
         }
     }
