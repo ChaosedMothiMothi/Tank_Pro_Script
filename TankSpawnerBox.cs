@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
@@ -15,8 +15,7 @@ public class TankSpawnerBox : MonoBehaviour
         public enum SpawnType
         {
             Tank,
-            Item,
-            DisadvantageItem
+            Item
         }
 
         [Tooltip("出現タイプ")]
@@ -72,6 +71,9 @@ public class TankSpawnerBox : MonoBehaviour
     {
         _myCollider = GetComponent<Collider>();
         _myTankStatus = GetComponent<TankStatus>();
+        if (_myTankStatus != null) _myTankStatus.canReceiveBuffs = false;
+
+        transform.localScale = Vector3.one;
 
         Rigidbody rb = GetComponent<Rigidbody>();
         if (rb != null)
@@ -90,10 +92,14 @@ public class TankSpawnerBox : MonoBehaviour
         _owner = owner;
         _team = team;
 
+        transform.SetParent(null, true);
+        transform.localScale = Vector3.one;
+
         _currentBoxHp = maxHp;
 
         if (_myTankStatus != null)
         {
+            _myTankStatus.canReceiveBuffs = false;
             _myTankStatus.SetTeam(_team, false, false, -1);
         }
 
@@ -127,6 +133,9 @@ public class TankSpawnerBox : MonoBehaviour
 
     private void Update()
     {
+        if (transform.localScale != Vector3.one)
+            transform.localScale = Vector3.one;
+
         // ★修正: 箱専用のHPが0以下になったら破壊する
         if (_currentBoxHp <= 0 && !_isProcessed)
         {
@@ -156,7 +165,13 @@ public class TankSpawnerBox : MonoBehaviour
             if (entry == null || entry.prefab == null) continue;
 
             currentWeight += entry.weight;
-            if (randomValue < currentWeight) return entry;
+            if (randomValue < currentWeight)
+            {
+                // 旧データの不正値（例: 旧DisadvantageItem=2）が残っていても Item として扱う
+                if (!System.Enum.IsDefined(typeof(SpawnEntry.SpawnType), entry.spawnType))
+                    entry.spawnType = SpawnEntry.SpawnType.Item;
+                return entry;
+            }
         }
 
         return null;
@@ -189,6 +204,12 @@ public class TankSpawnerBox : MonoBehaviour
         Vector3 spawnPos = transform.position + Vector3.up * spawnOffsetY;
         _dummyVisual = Instantiate(_selectedEntry.prefab, spawnPos, transform.rotation, transform);
         _dummyVisual.transform.localScale = Vector3.one * 0.4f;
+
+        // ダミー内のTankStatusは設置者と同じチームにして、敵判定・火炎放射の誤反応を防ぐ
+        foreach (var ts in _dummyVisual.GetComponentsInChildren<TankStatus>(true))
+        {
+            ts.SetTeam(_team, false, false, -1);
+        }
 
         foreach (var mb in _dummyVisual.GetComponentsInChildren<MonoBehaviour>()) mb.enabled = false;
         foreach (var agent in _dummyVisual.GetComponentsInChildren<UnityEngine.AI.NavMeshAgent>()) agent.enabled = false;

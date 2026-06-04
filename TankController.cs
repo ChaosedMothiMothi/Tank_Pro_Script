@@ -10,6 +10,8 @@ public class TankController : MonoBehaviour
     [SerializeField] private Transform turretTransform;
     [SerializeField] private Transform firePoint;
 
+    public Transform FirePoint => firePoint;
+
     [Header("Mine Settings")]
     [Tooltip("地雷を設置する位置のZ軸のズレ（マイナスで戦車の後方、0で戦車の中心）")]
     [SerializeField] private float mineSpawnOffsetZ = 2f;
@@ -58,6 +60,7 @@ public class TankController : MonoBehaviour
     public void OnFire(InputAction.CallbackContext context)
     {
         if (!IsGameActive) return;
+        if (tankStatus.isDevil666) return;
         if (context.started && _currentAmmoCount > 0 && !tankStatus.IsInStun)
         {
             StartCoroutine(ShootRoutine());
@@ -68,6 +71,7 @@ public class TankController : MonoBehaviour
     {
         if (!IsGameActive) return;
         if (!context.performed || tankStatus.IsInStun) return;
+        if (tankStatus.isDevilMineLeaker) return;
         if (tankStatus.ActiveMineCount >= tankStatus.GetTotalMineLimit()) return;
         StartCoroutine(PlaceMineRoutine());
     }
@@ -95,7 +99,7 @@ public class TankController : MonoBehaviour
         }
 
         // ★バーサーカーモード中の移動
-        if (tankStatus.isBerserkerMode)
+        if (tankStatus.isBerserkerMode || tankStatus.isDevilBerserk)
         {
             HandleBerserkerMovement();
         }
@@ -279,6 +283,6 @@ public class TankController : MonoBehaviour
 
     public void OnMaxAmmoIncreased()
     {
-        _currentAmmoCount++;
+        _currentAmmoCount = tankStatus.GetTotalMaxAmmo();
     }
 }

@@ -179,6 +179,12 @@ public class ExchangeBoxController : MonoBehaviour
             case ItemType.ChangeMine:
                 if (_assignedItem.equipmentPrefab != null) player.ChangeMinePrefab(_assignedItem.equipmentPrefab);
                 break;
+            case ItemType.DevilMineLeaker:
+                player.ApplyPowerUp(ItemType.DevilMineLeaker, _assignedItem.equipmentPrefab);
+                break;
+            case ItemType.Devil666:
+                player.ApplyPowerUp(ItemType.Devil666, _assignedItem.equipmentPrefab);
+                break;
             case ItemType.ExtraLife:
                 // ★追加: ショップ箱から1UPを買った時
                 if (GameManager.Instance != null) GameManager.Instance.AddPlayerLife();

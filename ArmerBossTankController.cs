@@ -659,6 +659,7 @@ public class ArmerBossTankController : MonoBehaviour
 
     private void ThinkMine()
     {
+        if (tankStatus.isDevilMineLeaker) return;
         if (enemyData == null || !enemyData.useMine) return;
         if (tankStatus.ActiveMineCount >= tankStatus.GetData().maxMines) return;
         if (Physics.OverlapSphere(transform.position, enemyData.minePlacementSpacing).Any(c => c.CompareTag("Mine"))) return;

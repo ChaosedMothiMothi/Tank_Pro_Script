@@ -599,6 +599,7 @@ public class AntennaBossController : MonoBehaviour
     // ==========================================
     private void ThinkMine()
     {
+        if (tankStatus.isDevilMineLeaker) return;
         if (!enemyData.useMine) return;
 
         // ★ク��ルタイム中は絶対に置かない

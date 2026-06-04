@@ -21,12 +21,12 @@ public class HPBarManager : MonoBehaviour
     }
 
     // ==========================================
-    // šC³: ƒvƒŒƒnƒu–¼‚Å‚Í‚È‚­AScriptableObject‚ÌutankNamev‚ğg‚¤
+    // ï¿½ï¿½ï¿½Cï¿½ï¿½: ï¿½vï¿½ï¿½ï¿½nï¿½uï¿½ï¿½ï¿½Å‚Í‚È‚ï¿½ï¿½AScriptableObjectï¿½ÌutankNameï¿½vï¿½ï¿½ï¿½gï¿½ï¿½
     // ==========================================
     public void RegisterTank(TankStatus tank)
     {
-        // TankStatusData (ScriptableObject) ‚©‚ç³®‚È–¼‘O‚ğæ“¾‚·‚éB
-        // ‚à‚µƒf[ƒ^‚ª‚È‚¢A‚Ü‚½‚Í–¼‘O‚ª–¢İ’è‚È‚çƒvƒŒƒnƒu–¼‚ğƒtƒH[ƒ‹ƒoƒbƒN‚Æ‚µ‚Äg‚¤B
+        // TankStatusData (ScriptableObject) ï¿½ï¿½ï¿½ç³ï¿½ï¿½ï¿½È–ï¿½ï¿½Oï¿½ï¿½ï¿½æ“¾ï¿½ï¿½ï¿½ï¿½B
+        // ï¿½ï¿½ï¿½ï¿½ï¿½fï¿½[ï¿½^ï¿½ï¿½ï¿½È‚ï¿½ï¿½Aï¿½Ü‚ï¿½ï¿½Í–ï¿½ï¿½Oï¿½ï¿½ï¿½ï¿½ï¿½İ’ï¿½È‚ï¿½vï¿½ï¿½ï¿½nï¿½uï¿½ï¿½ï¿½ï¿½ï¿½tï¿½Hï¿½[ï¿½ï¿½ï¿½oï¿½bï¿½Nï¿½Æ‚ï¿½ï¿½Ägï¿½ï¿½ï¿½B
         string displayName = tank.name;
         if (tank.GetData() != null && !string.IsNullOrEmpty(tank.GetData().tankName))
         {
@@ -51,7 +51,7 @@ public class HPBarManager : MonoBehaviour
             }
             else
             {
-                Debug.LogWarning("GenericHPBarPrefab ‚É HPBarController ‚ªƒAƒ^ƒbƒ`‚³‚ê‚Ä‚¢‚Ü‚¹‚ñI");
+                Debug.LogWarning("GenericHPBarPrefab ï¿½ï¿½ HPBarController ï¿½ï¿½ï¿½Aï¿½^ï¿½bï¿½`ï¿½ï¿½ï¿½ï¿½Ä‚ï¿½ï¿½Ü‚ï¿½ï¿½ï¿½I");
             }
         }
     }
@@ -70,7 +70,7 @@ public class HPBarManager : MonoBehaviour
             }
             else
             {
-                Debug.LogWarning("GenericHPBarPrefab ‚É HPBarController ‚ªƒAƒ^ƒbƒ`‚³‚ê‚Ä‚¢‚Ü‚¹‚ñI");
+                Debug.LogWarning("GenericHPBarPrefab ï¿½ï¿½ HPBarController ï¿½ï¿½ï¿½Aï¿½^ï¿½bï¿½`ï¿½ï¿½ï¿½ï¿½Ä‚ï¿½ï¿½Ü‚ï¿½ï¿½ï¿½I");
             }
         }
     }
@@ -81,6 +81,15 @@ public class HPBarManager : MonoBehaviour
         {
             bar.SetHP(currentHp, maxHp);
             if (currentHp <= 0) { _activeBars.Remove(tank); bar.Hide(); }
+        }
+    }
+
+    public void UnregisterTank(TankStatus tank)
+    {
+        if (_activeBars.TryGetValue(tank, out HPBarController bar) && bar != null)
+        {
+            _activeBars.Remove(tank);
+            bar.Hide();
         }
     }
 

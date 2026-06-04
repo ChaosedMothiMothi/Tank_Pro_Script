@@ -5,77 +5,78 @@ public class EnemyData : ScriptableObject
 {
     public enum AIType
     {
-        [InspectorName("ƒj[ƒg")] Neat,
-        [InspectorName("‚Ü‚Ê‚¯")] Idiot,
-        [InspectorName("‚Ñ‚Ñ‚è")] Coward,
-        [InspectorName("Ï‹É“I")] Aggressive,
-        [InspectorName("U•àD‚«")] Wanderer,
-        [InspectorName("˜‹Ğ’…")] Sycophant, // ’Ç‰Á
-        [InspectorName("ƒŠ[ƒ_[ƒVƒbƒv")] Leadership,
+        [InspectorName("ãƒ‹ãƒ¼ãƒˆ")] Neat,
+        [InspectorName("ã¾ã¬ã‘")] Idiot,
+        [InspectorName("ãŠãã³ã‚‡ã†")] Coward,
+        [InspectorName("æ„šç›´")] Aggressive,
+        [InspectorName("æ•£æ­©å¥½ã")] Wanderer,
+        [InspectorName("è…°å·¾ç€")] Sycophant,
+        [InspectorName("ãƒªãƒ¼ãƒ€ãƒ¼")] Leadership,
     }
 
     public enum TargetStrategy
     {
-        [InspectorName("·’…")] Persistent,   // ˆê“x‘_‚Á‚½‚ç•Ï‚¦‚È‚¢
-        [InspectorName("‚«‚Ü‚®‚ê")] Capricious // 3•b+ƒ‰ƒ“ƒ_ƒ€‚ÅØ‚è‘Ö‚¦
+        [InspectorName("åŸ·ç€")] Persistent,
+        [InspectorName("æ°—ã¾ãã‚Œ")] Capricious
     }
 
-    [Header("--- AI«Šiİ’è ---")]
-    [Tooltip("“GíÔ‚Ìs“®ƒpƒ^[ƒ“")]
+    [Header("--- AI ---")]
+    [Tooltip("æ€§æ ¼")]
     public AIType aiType;
 
-    [Tooltip("ƒ^[ƒQƒbƒg‘I’èŠî€")]
+    [Tooltip("ç‹™ã„æ–¹")]
     public TargetStrategy targetStrategy;
 
-    // š’Ç‰Á: ƒVƒ“ƒvƒ‹ƒ‚[ƒh—p‚Ìƒp[ƒcƒhƒƒbƒvİ’è
-    [Header("--- ƒVƒ“ƒvƒ‹ƒ‚[ƒhİ’è ---")]
-    [Tooltip("‚±‚Ì“G‚ª€–S‚É—‚Æ‚·ƒp[ƒc‚Ì”")]
+    [Header("--- ã‚¨ãƒãƒŸãƒ¼è¨­å®š ---")]
+    [Tooltip("ãƒ‘ãƒ¼ãƒ„ãƒ‰ãƒ­ãƒƒãƒ—æ•°")]
     public int partsDropCount = 1;
 
-    [Tooltip("ON‚É‚·‚é‚Æƒ{ƒX—pƒhƒƒbƒvi¶‘¶ƒvƒŒƒCƒ„[‘Sˆõ‚Éuƒhƒƒbƒv”+1-ƒvƒŒƒCƒ„[”v‚ğ”z‚éj‚É‚È‚è‚Ü‚·")]
+    [Tooltip("ãƒœã‚¹ã®ãƒ‘ãƒ¼ãƒ„ãƒ‰ãƒ­ãƒƒãƒ—")]
     public bool isBossDrop = false;
 
-    [Header("Mine Settings")]
+    [Header("--- åœ°é›·ã®è¨­å®š ---")]
+    [Tooltip("åœ°é›·ã‚’ä½¿ç”¨ã™ã‚‹ã‹")]
     public bool useMine = false;
 
-    [Header("--- ˆÚ“®E‰ñ”ğİ’è ---")]
-    [Tooltip("’e‚ğ”ğ‚¯‚é”¼Œa")]
-    public float shellAvoidRadius = 3.0f;
-
-    [Tooltip("–¡•û’n—‹‚Ì”F¯E‰ñ”ğ”ÍˆÍiƒfƒtƒHƒ‹ƒg‚Å”ğ‚¯‚éj")]
-    public float allyMineAvoidRadius = 4.0f; // š’Ç‰Á
-
-    [Tooltip("’n—‹‚ğ”ğ‚¯‚é”¼Œa")]
-    public float mineAvoidRadius = 2.0f;
-
-    [Tooltip("’n—‹İ’u‚ÌÅ’áŠÔŠu")]
+    [Tooltip("åœ°é›·ã®å†é…ç½®é–“éš”è·é›¢")]
     public float minePlacementSpacing = 3.0f;
 
-    [Header("--- –C“ƒEUŒ‚İ’è ---")]
-    [Tooltip("–C“ƒ‰ñ“]‘¬“x")]
+    [Header("--- å›é¿æ€§èƒ½ ---")]
+    [Tooltip("å¼¾ã®å›é¿åŠå¾„")]
+    public float shellAvoidRadius = 3.0f;
+
+    [Tooltip("å‘³æ–¹åœ°é›·ã®å›é¿åŠå¾„")]
+    public float allyMineAvoidRadius = 4.0f;
+
+    [Tooltip("åœ°é›·ã®å›é¿åŠå¾„")]
+    public float mineAvoidRadius = 2.0f;
+
+    [Header("--- å°„æ’ƒè¨­å®š ---")]
+    [Tooltip("ç ²å¡”å›è»¢é€Ÿåº¦")]
     public float turretRotationSpeed = 60f;
 
-    [Tooltip("õ“G‚Ì–C“ƒñU‚è”ÍˆÍ")]
+    [Tooltip("ç ²å¡”ã®ç´¢æ•µè§’åº¦")]
     public float turretSearchAngle = 15f;
 
-    [Tooltip("ËŒ‚‹–—eŠp“x")]
+    [Tooltip("å°„ç·šè¨±å®¹è§’åº¦")]
     public float shotAllowAngle = 5f;
 
-    [Tooltip("”­ËŒã‚ÌƒN[ƒ‹ƒ_ƒEƒ“i•bj")]
+    [Tooltip("å°„æ’ƒå¾Œã®ã‚¯ãƒ¼ãƒ«ã‚¿ã‚¤ãƒ ")]
     public float fireCooldown = 1.0f;
 
-    [Tooltip("–¡•û‚Ö‚ÌŒëË‚ğl—¶‚·‚é‚©")]
+    [Tooltip("é€£å°„ã‚¿ã‚¤ãƒ—ã‹")]
+    public bool isGatlingType = false;
+
+    [Header("--- å°„ç·šæ„è­˜ã«ã¤ã„ã¦ ---")]
+    [Tooltip("å‘³æ–¹æ„è­˜ã‚’æŒã¤ã‹")]
     public bool isTeamAware = true;
 
-    [Tooltip("’µ’e—\‘ª‚ğl—¶‚·‚é‚©")]
+    [Tooltip("è·³å¼¾ã‚’æ„è­˜ã™ã‚‹ã‹")]
     public bool considerReflection = true;
 
-    // š’Ç‰Á: EˆÓ‚Ì‚‚¢’µ’e—U“±iƒXƒ}[ƒgƒGƒCƒ€j‹@”\
-    [Header("--- ƒfƒoƒbƒOE“Áê‹@”\ ---")]
-    [Tooltip("yƒfƒoƒbƒO—pzON‚É‚·‚é‚ÆA’µ’e‚ÅƒvƒŒƒCƒ„[‚É“–‚½‚éŠp“x‚ğ©“®ŒvZ‚µA“IŠm‚É–C“ƒ‚ğŒü‚¯‚ÄŒ‚‚Â‚æ‚¤‚É‚È‚è‚Ü‚·i”ñí‚É‹­—Í‚Å‚·j")]
+    [Tooltip("è·³å¼¾æ„è­˜å¼·åŒ–")]
     public bool useSmartRicochet = false;
 
-    // š’Ç‰Á: Ëü”»’èiƒŒƒCj‚Ì‘¾‚³‚ğ’²®‚·‚éƒpƒ‰ƒ[ƒ^[
-    [Tooltip("ËüƒVƒ~ƒ…ƒŒ[ƒVƒ‡ƒ“‚ÌƒŒƒCi‹…j‚Ì‘¾‚³BÀÛ‚Ì’e‚Ì”¼Œai0.3‚È‚Çj‚É‡‚í‚¹‚é‚Æ³Šm‚É‚È‚è‚Ü‚·B¬‚³‚·‚¬‚é‚Æ‚·‚è”²‚¯A‘å‚«‚·‚¬‚é‚Æ•Ç‚ÌŠp‚Éˆø‚Á‚©‚©‚è‚â‚·‚­‚È‚è‚Ü‚·B")]
+    [Tooltip("å°„ç·šã®å¤ªã•")]
     public float raycastRadius = 0.3f;
 }

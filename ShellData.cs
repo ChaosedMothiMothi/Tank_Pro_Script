@@ -1,22 +1,58 @@
 using UnityEngine;
 
 /// <summary>
-/// ’e‚ÌŠî–{«”\‚ğ’è‹`‚·‚éScriptableObject
+///  ScriptableObject
 /// </summary>
 [CreateAssetMenu(fileName = "NewShellData", menuName = "TankGame/ShellData")]
 public class ShellData : ScriptableObject
 {
+    [Tooltip("ï¿½eï¿½Ì–ï¿½ï¿½ï¿½")]
     public string shellName = "Normal Shell";
+
+    [Tooltip("ï¿½eï¿½Ì‘ï¿½ï¿½x")]
     public float speed = 10f;
+
+    [Tooltip("ï¿½eï¿½Ìƒ_ï¿½ï¿½ï¿½[ï¿½W")]
     public int damage = 10;
-    public int maxBounces = 1; // ’µ’e‰ñ”
+
+    [Tooltip("ï¿½ï¿½ï¿½eï¿½ï¿½")]
+    public int maxBounces = 1;
+
+    [Tooltip("ï¿½eï¿½Ìcï¿½ï¿½ï¿½ï¿½ï¿½Ô@ï¿½ï¿½ï¿½ï¿½{ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ü‚ï¿½ï¿½ï¿½")]
     public float lifeTime = 360f;
 
-    [Header("”š”­’e‚Ìİ’è")]
-    public bool isExplosive;          // ”š”­’e‚©‚Ç‚¤‚©
-    public int explosionDamage = 20;  // ”š”­‚Ìƒ_ƒ[ƒW
-    public float explosionRadius = 3f; // ”š”­‚Ì”¼Œa
-    public float explosionDuration = 0.2f; // ”»’è‚Ì‘±ŠÔ
-    public GameObject explosionPrefab; // ‰‰o—pƒGƒtƒFƒNƒg
-    public float explosionLifetime = 1f;   // ƒGƒtƒFƒNƒg‚ÌÁ–ÅŠÔ
+    [Header("ï¿½ï¿½ï¿½ï¿½ï¿½eï¿½Ìİ’ï¿½")]
+    [Tooltip("ï¿½ï¿½ï¿½ï¿½ï¿½eï¿½ï¿½")]
+    public bool isExplosive;
+
+    [Tooltip("ï¿½ï¿½ï¿½ï¿½ï¿½_ï¿½ï¿½ï¿½[ï¿½W")]
+    public int explosionDamage = 20;
+
+    [Tooltip("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½a")]
+    public float explosionRadius = 3f;
+
+    [Tooltip("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ìcï¿½ï¿½ï¿½ï¿½ï¿½ï¿½")]
+    public float explosionDuration = 0.2f;
+
+    [Tooltip("ï¿½ï¿½ï¿½ï¿½ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½Ìƒvï¿½ï¿½ï¿½nï¿½u")]
+    public GameObject explosionPrefab;
+
+    [Tooltip("ï¿½ï¿½ï¿½ï¿½ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½Ìcï¿½ï¿½ï¿½ï¿½ï¿½ï¿½")]
+    public float explosionLifetime = 1f;
+
+    [Header("ï¿½Î‰ï¿½ï¿½ï¿½ï¿½Ëİ’ï¿½iï¿½pï¿½[ï¿½eï¿½Bï¿½^ï¿½ï¿½ï¿½Nï¿½ï¿½pï¿½eï¿½İ’ï¿½j")]
+    [Tooltip("ï¿½Î‰ï¿½ï¿½ï¿½ï¿½Ë’eï¿½ï¿½")]
+    public bool isFlamethrower = false;
+
+    [Tooltip("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ’Ê‚ï¿½ï¿½é‚©")]
+    public bool ignoreExplosionsAndShells = false;
+
+    [Tooltip("ï¿½gï¿½å‚·ï¿½é‚©")]
+    public bool scaleOverTime = false;
+
+    [Tooltip("ï¿½Ç‚ê‚¾ï¿½ï¿½ï¿½å‚«ï¿½ï¿½ï¿½È‚é‚©")]
+    public float scaleMultiplier = 2.0f;
+
+    [Tooltip("ï¿½Ç‚É“ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ìï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È‚ï¿½ï¿½ï¿½ï¿½ï¿½")]
+    public bool muteDestroySound = false;
 }

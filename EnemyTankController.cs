@@ -47,6 +47,11 @@ public class EnemyTankController : MonoBehaviour
     // ★追加: スマートエイム用変数
     private Vector3 _smartAimDir = Vector3.zero;
     private float _smartAimTimer = 0f;
+    private bool _isGatlingBursting = false;
+    private Coroutine _gatlingBurstCoroutine;
+    private TankStatus _gatlingBurstTarget;
+    private Vector3 _gatlingLastTargetPos;
+    private Vector3 _gatlingLastMoveDir = Vector3.forward;
 
     // --- 腰巾着・リーダーシップ用 ---
     private TankStatus _leaderTarget; // 腰巾着が追従する対象
@@ -243,7 +248,14 @@ public class EnemyTankController : MonoBehaviour
     private void LateUpdate()
     {
         if (tankStatus.IsDead || tankStatus.IsInStun) return;
-        if (!_isActionRigid) HandleTurretRotation(); // 硬直中は回転しない場合はここにガードを入れる
+
+        if (turretTransform != null)
+            turretTransform.rotation = _independentTurretRotation;
+
+        if (tankStatus.isJammingBerserk) return;
+        if (_isGatlingBursting || _isActionRigid) return;
+
+        TryStartShooting();
     }
 
     // --- AI思考: 移動 ---
@@ -474,7 +486,7 @@ public class EnemyTankController : MonoBehaviour
 
     private void ExecuteMovement()
     {
-        if (_isActionRigid || tankStatus.IsInStun)
+        if ((_isActionRigid || tankStatus.IsInStun) && !tankStatus.isDevilBerserk)
         {
             StopMovementImmediate();
             return;
@@ -482,7 +494,7 @@ public class EnemyTankController : MonoBehaviour
 
         if (_agent == null || !_agent.isOnNavMesh)
         {
-            StopMovementImmediate();
+            if (!tankStatus.isDevilBerserk) StopMovementImmediate();
             return;
         }
 
@@ -537,7 +549,7 @@ public class EnemyTankController : MonoBehaviour
             _rb.MoveRotation(Quaternion.Euler(0, nextAngle, 0));
 
             // 車体が目標方向を向いていない（45度以上ズレている）時は、進まずにその場で旋回だけする
-            if (Mathf.Abs(Mathf.DeltaAngle(currentY, targetAngle)) > 45.0f)
+            if (Mathf.Abs(Mathf.DeltaAngle(currentY, targetAngle)) > 45.0f && !tankStatus.isDevilBerserk)
             {
                 _rb.linearVelocity = new Vector3(0, _rb.linearVelocity.y, 0);
             }
@@ -716,6 +728,7 @@ public class EnemyTankController : MonoBehaviour
 
     private void ThinkMine()
     {
+        if (tankStatus.isDevilMineLeaker) return;
         if (!enemyData.useMine) return;
         if (tankStatus.ActiveMineCount >= tankStatus.GetData().maxMines) return;
         if (tankStatus.ActiveMineCount >= tankStatus.GetTotalMineLimit()) return;
@@ -831,6 +844,12 @@ public class EnemyTankController : MonoBehaviour
             return;
         }
 
+        if (_isGatlingBursting)
+        {
+            UpdateGatlingBurstTurretAim();
+            return;
+        }
+
         Vector3 targetDir = Vector3.forward;
         if (_currentTarget != null)
         {
@@ -877,73 +896,194 @@ public class EnemyTankController : MonoBehaviour
         }
     }
 
-    private void HandleTurretRotation()
+    private void TryStartShooting()
     {
-        if (turretTransform != null)
+        if (tankStatus.isDevil666) return;
+        if (tankStatus.IsInStun || _fireCooldownTimer > 0 || _currentAmmoCount <= 0) return;
+
+        if (enemyData != null && enemyData.isGatlingType)
         {
-            turretTransform.rotation = _independentTurretRotation;
+            if (_gatlingBurstCoroutine != null) return;
+            if (CheckShootTrajectory())
+                _gatlingBurstCoroutine = StartCoroutine(GatlingBurstRoutine());
+            return;
         }
 
-        // ★追加: 暴走中は弾を撃たないようにここで処理を止める
-        if (tankStatus.isJammingBerserk) return;
-
-        // 射撃試行
         if (CheckShootTrajectory())
-        {
             TryFire();
-        }
     }
 
     [Tooltip("射撃の試行（射線と弾数、壁めり込みの確認）")]
+    public void OnMaxAmmoIncreased()
+    {
+        _currentAmmoCount = tankStatus.GetTotalMaxAmmo();
+    }
+
     public void TryFire()
     {
+        if (tankStatus.isDevil666) return;
         if (tankStatus.IsInStun || _isActionRigid || _fireCooldownTimer > 0 || _currentAmmoCount <= 0) return;
+        if (!CanFireFromMuzzle()) return;
+
+        StartCoroutine(FireRoutine());
+    }
+
+    private bool CanFireFromMuzzle()
+    {
+        if (firePoint == null) return false;
 
         int wallLayerMask = LayerMask.GetMask("Wall");
         Vector3 muzzlePos = firePoint.position;
         Vector3 turretCenter = turretTransform != null ? turretTransform.position : transform.position;
+        float checkRadius = enemyData != null ? enemyData.raycastRadius : 0.25f;
+        if (Physics.CheckSphere(muzzlePos, checkRadius, wallLayerMask)) return false;
+        if (Physics.Linecast(turretCenter, muzzlePos, wallLayerMask)) return false;
+        return true;
+    }
 
-        // ★壁撃ち・透視バグ防止の最終防衛線:
-        // 発射口が壁にめり込んでいる場合は、AIが撃ちたがっても絶対に引き金を引かせない
-        float checkRadius = (enemyData != null) ? enemyData.raycastRadius : 0.25f;
-        if (Physics.CheckSphere(muzzlePos, checkRadius, wallLayerMask)) return;
-        if (Physics.Linecast(turretCenter, muzzlePos, wallLayerMask)) return;
+    private void FireSingleShell()
+    {
+        if (tankStatus.GetShellPrefab() == null || firePoint == null) return;
 
-        StartCoroutine(FireRoutine());
+        Transform flashPoint = muzzleFlashPoint != null ? muzzleFlashPoint : firePoint;
+        if (EffectManager.Instance != null)
+        {
+            EffectManager.Instance.PlayMuzzleFlash(flashPoint);
+            EffectManager.Instance.ShotSound();
+        }
+
+        GameObject shellObj = Instantiate(tankStatus.GetShellPrefab(), firePoint.position, firePoint.rotation);
+        shellObj.GetComponent<ShellController>()?.Launch(gameObject, 0);
     }
 
     [Tooltip("実際の射撃処理と硬直時間の管理")]
     private IEnumerator FireRoutine()
     {
-        _isActionRigid = true; // 硬直開始
-        _currentAmmoCount--;   // 撃ったので弾を1つ消費する
+        _isActionRigid = true;
+        _currentAmmoCount--;
 
-        if (tankStatus.GetShellPrefab() != null && firePoint != null)
-        {
-            // ★修正: muzzleFlashPoint が設定されていればそれを使い、なければ firePoint を使う
-            Transform flashPoint = muzzleFlashPoint != null ? muzzleFlashPoint : firePoint;
-            if (EffectManager.Instance != null) EffectManager.Instance.PlayMuzzleFlash(flashPoint);
-
-            GameObject shellObj = Instantiate(tankStatus.GetShellPrefab(), firePoint.position, firePoint.rotation);
-            EffectManager.Instance.ShotSound();
-
-            // ★修正: ここにあった Physics.IgnoreCollision（すり抜け処理）を完全に削除しました。
-            // これにより、跳弾してきた自分の弾が自分自身に当たって自爆するようになります（プレイヤーと同じ条件）。
-
-            ShellController shell = shellObj.GetComponent<ShellController>();
-            if (shell != null) shell.Launch(gameObject, 0);
-        }
-
-        // 撃ったらプレイヤーと同じルールでリロード処理を開始する
+        FireSingleShell();
         StartCoroutine(ReloadAmmoRoutine());
 
-        // 硬直待機（ShotDelay）
         yield return new WaitForSeconds(tankStatus.GetData().shotDelay);
 
-        // 元々の「敵の攻撃クールタイム」をここでセットし、連射を防ぐ
-        _fireCooldownTimer = enemyData.fireCooldown;
+        if (enemyData != null) _fireCooldownTimer = enemyData.fireCooldown;
 
-        _isActionRigid = false; // 硬直解除
+        _isActionRigid = false;
+    }
+
+    private void UpdateGatlingBurstTurretAim()
+    {
+        if (turretTransform == null) return;
+
+        Vector3 aimDir = GetGatlingBurstAimDirection();
+        if (aimDir.sqrMagnitude < 0.001f) return;
+
+        float rotSpeed = enemyData != null ? enemyData.turretRotationSpeed : 60f;
+        Quaternion targetRot = Quaternion.LookRotation(aimDir, Vector3.up);
+        _independentTurretRotation = Quaternion.RotateTowards(_independentTurretRotation, targetRot, rotSpeed * Time.deltaTime);
+    }
+
+    private Vector3 GetGatlingBurstAimDirection()
+    {
+        TankStatus trackTarget = _gatlingBurstTarget;
+        if (trackTarget == null || trackTarget.IsDead)
+            trackTarget = _currentTarget;
+
+        if (trackTarget == null || trackTarget.IsDead)
+            return _gatlingLastMoveDir.sqrMagnitude > 0.001f ? _gatlingLastMoveDir : transform.forward;
+
+        Vector3 currentPos = trackTarget.transform.position;
+        Vector3 delta = currentPos - _gatlingLastTargetPos;
+        delta.y = 0f;
+
+        if (delta.sqrMagnitude > 0.01f)
+        {
+            _gatlingLastMoveDir = delta.normalized;
+            _gatlingLastTargetPos = currentPos;
+            return _gatlingLastMoveDir;
+        }
+
+        Vector3 toTarget = currentPos - turretTransform.position;
+        toTarget.y = 0f;
+        if (toTarget.sqrMagnitude > 0.001f)
+        {
+            _gatlingLastMoveDir = toTarget.normalized;
+            return _gatlingLastMoveDir;
+        }
+
+        return _gatlingLastMoveDir.sqrMagnitude > 0.001f ? _gatlingLastMoveDir : transform.forward;
+    }
+
+    private IEnumerator GatlingBurstRoutine()
+    {
+        _isGatlingBursting = true;
+        _isActionRigid = true;
+
+        _gatlingBurstTarget = _currentTarget;
+        if (_gatlingBurstTarget != null)
+            _gatlingLastTargetPos = _gatlingBurstTarget.transform.position;
+        else
+            _gatlingLastTargetPos = transform.position + transform.forward * 5f;
+
+        _gatlingLastMoveDir = transform.forward;
+        if (_gatlingBurstTarget != null)
+        {
+            Vector3 initialDir = _gatlingBurstTarget.transform.position - turretTransform.position;
+            initialDir.y = 0f;
+            if (initialDir.sqrMagnitude > 0.001f) _gatlingLastMoveDir = initialDir.normalized;
+        }
+
+        if (enemyData != null && enemyData.useSmartRicochet && _smartAimDir != Vector3.zero)
+        {
+            _gatlingLastMoveDir = _smartAimDir;
+            _independentTurretRotation = Quaternion.LookRotation(_smartAimDir);
+            if (turretTransform != null) turretTransform.rotation = _independentTurretRotation;
+        }
+
+        bool cutOff = false;
+        float shotDelay = tankStatus.GetData() != null ? tankStatus.GetData().shotDelay : 0.2f;
+
+        while (_currentAmmoCount > 0 && !tankStatus.IsDead && !tankStatus.IsInStun)
+        {
+            UpdateGatlingBurstTurretAim();
+            if (turretTransform != null) turretTransform.rotation = _independentTurretRotation;
+
+            if (!CanFireFromMuzzle())
+            {
+                cutOff = true;
+                break;
+            }
+
+            _currentAmmoCount--;
+            FireSingleShell();
+            StartCoroutine(ReloadAmmoRoutine());
+
+            if (_currentAmmoCount <= 0) break;
+
+            float elapsed = 0f;
+            while (elapsed < shotDelay)
+            {
+                if (tankStatus.IsDead || tankStatus.IsInStun) break;
+                UpdateGatlingBurstTurretAim();
+                if (turretTransform != null) turretTransform.rotation = _independentTurretRotation;
+                elapsed += Time.deltaTime;
+                yield return null;
+            }
+        }
+
+        if (cutOff)
+        {
+            _smartAimDir = Vector3.zero;
+            _smartAimTimer = 0f;
+        }
+
+        _gatlingBurstTarget = null;
+        if (enemyData != null) _fireCooldownTimer = enemyData.fireCooldown;
+
+        _isGatlingBursting = false;
+        _isActionRigid = false;
+        _gatlingBurstCoroutine = null;
     }
 
     [Tooltip("弾を1発ずつ回復する処理（プレイヤーと同じ挙動）")]

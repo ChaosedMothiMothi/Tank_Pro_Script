@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 
@@ -34,6 +34,11 @@ public class MineController : MonoBehaviour
     {
         _ownerStatus = owner;
         mineData = data;
+
+        if (_ownerStatus != null && _ownerStatus.isDevilGiant)
+        {
+            transform.localScale *= 1.5f;
+        }
 
         if (DebugVisualizer.Instance != null && mineData != null)
         {
@@ -141,6 +146,14 @@ public class MineController : MonoBehaviour
 
             ItemBoxController itemBox = hit.GetComponent<ItemBoxController>();
             if (itemBox != null) itemBox.TakeDamage(totalDamage, _ownerStatus);
+
+            WeakPoint wp = hit.GetComponent<WeakPoint>();
+            if (wp != null && wp.bossStatus != null)
+            {
+                wp.TakeWeakPointDamage(totalDamage, _ownerStatus);
+                damagedTanks.Add(wp.bossStatus);
+                continue;
+            }
 
             TankStatus tank = hit.GetComponentInParent<TankStatus>();
 

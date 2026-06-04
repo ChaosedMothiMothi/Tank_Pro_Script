@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.AI;
 using System.Collections;
 using System.Linq;
@@ -44,6 +44,11 @@ public class RobotBombController : MonoBehaviour
     {
         _ownerStatus = owner;
         _mineData = data;
+
+        if (_ownerStatus != null && _ownerStatus.isDevilGiant)
+        {
+            transform.localScale *= 1.5f;
+        }
 
         // ★修正: Startを待たずに、ここでNavMeshAgentの設定を切る
         // これをしないと、Warpした瞬間にTransformが地面に吸着してしまう
@@ -283,7 +288,23 @@ public class RobotBombController : MonoBehaviour
             if (itemBox != null) itemBox.TakeDamage(damage, _ownerStatus);
 
             // 1. 戦車へのダメージ（重複防止）
+            WeakPoint wp = hit.GetComponent<WeakPoint>();
+            if (wp != null && wp.bossStatus != null)
+            {
+                wp.TakeWeakPointDamage(damage, _ownerStatus);
+                damagedTanks.Add(wp.bossStatus);
+                continue;
+            }
+
             TankStatus tank = hit.GetComponentInParent<TankStatus>();
+
+            // ★修正: 爆風が当たったのが「牽引ボスの大型個体」だった場合、本体にダメージを流す
+            if (tank == null)
+            {
+                DamageForwarder forwarder = hit.GetComponentInParent<DamageForwarder>();
+                if (forwarder != null) tank = forwarder.mainTankStatus;
+            }
+
             if (tank != null && !damagedTanks.Contains(tank))
             {
                 tank.TakeDamage(damage, _ownerStatus);
@@ -318,6 +339,13 @@ public class RobotBombController : MonoBehaviour
 
         // ★追加: 接触したのが戦車だった場合
         TankStatus hitTank = hitObj.GetComponentInParent<TankStatus>();
+
+        if (hitTank == null)
+        {
+            DamageForwarder forwarder = hitObj.GetComponentInParent<DamageForwarder>();
+            if (forwarder != null) hitTank = forwarder.mainTankStatus;
+        }
+
         if (hitTank != null)
         {
             // 味方チームでなければ即爆発

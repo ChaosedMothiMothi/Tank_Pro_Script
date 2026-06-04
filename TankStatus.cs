@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 
@@ -21,12 +21,18 @@ public class TankStatus : MonoBehaviour
     public bool isCaptain = false;
     public bool isBoss = false;
     public int spawnIndex = -1;
+    [Tooltip("アイテムによるバフ効果を受けるかどうか")]
+    public bool canReceiveBuffs = true;
 
     [Header("Shield Configuration")]
     [SerializeField] private Transform shieldSpawnPoint;
 
     [Header("Weak Point Settings")]
     [SerializeField] private int weakPointBonusDamage = 10;
+
+    [Header("Damage Forwarding")]
+    [Tooltip("設定されている場合、受けたダメージをこのTankStatusに肩代わりさせます")]
+    public TankStatus damageForwardTarget;
 
     [Header("Buff Data")]
     public BuffStepData buffData;
@@ -45,6 +51,12 @@ public class TankStatus : MonoBehaviour
     public int levelMineDamage { get; private set; } = 0;
 
     public bool isBerserkerMode { get; private set; } = false;
+
+    // デビルアイテム状態
+    public bool isDevilBerserk { get; private set; } = false;
+    public bool isDevilGiant { get; private set; } = false;
+    public bool isDevilMineLeaker { get; private set; } = false;
+    public bool isDevil666 { get; private set; } = false;
 
     // 暴走自爆モードフラグと、突撃方向の保存
     public bool isJammingBerserk { get; private set; } = false;
@@ -247,8 +259,10 @@ public class TankStatus : MonoBehaviour
             Die();
         }
     }
-    public void ApplyPowerUp(ItemType type)
+    public void ApplyPowerUp(ItemType type, GameObject itemEquipmentPrefab = null)
     {
+        if (!canReceiveBuffs || IsTankSpawnerBoxEntity()) return;
+
         switch (type)
         {
             case ItemType.BouncePlus: if (levelBounces < 5) levelBounces++; break;
@@ -274,11 +288,205 @@ public class TankStatus : MonoBehaviour
             case ItemType.Shield: break;
             case ItemType.ChangeShell: break;
             case ItemType.ChangeMine: break;
+            case ItemType.DevilBerserk:
+                StartCoroutine(DevilBerserkRoutine());
+                break;
+            case ItemType.DevilGiant:
+                StartCoroutine(DevilGiantRoutine());
+                break;
+            case ItemType.DevilMineLeaker:
+                StartCoroutine(DevilMineLeakerRoutine(itemEquipmentPrefab));
+                break;
+            case ItemType.Devil666:
+                StartCoroutine(Devil666Routine(itemEquipmentPrefab));
+                break;
         }
+    }
+
+    private IEnumerator DevilBerserkRoutine()
+    {
+        isDevilBerserk = true;
+        yield return new WaitForSeconds(10f);
+        isDevilBerserk = false;
+    }
+
+    private const float DevilGiantScaleMultiplier = 1.5f;
+    private const float DevilGiantScaleAnimDuration = 0.5f;
+
+    private bool IsTankSpawnerBoxEntity() => GetComponent<TankSpawnerBox>() != null;
+
+    private IEnumerator DevilGiantRoutine()
+    {
+        if (IsTankSpawnerBoxEntity()) yield break;
+        if (isDevilGiant) yield break;
+        isDevilGiant = true;
+
+        Vector3 originalScale = transform.localScale;
+        Vector3 targetScale = originalScale * DevilGiantScaleMultiplier;
+
+        yield return AnimateScaleRoutine(originalScale, targetScale, DevilGiantScaleAnimDuration);
+
+        float holdTime = Mathf.Max(0f, 10f - DevilGiantScaleAnimDuration * 2f);
+        yield return new WaitForSeconds(holdTime);
+
+        yield return AnimateScaleRoutine(targetScale, originalScale, DevilGiantScaleAnimDuration);
+
+        isDevilGiant = false;
+    }
+
+    private IEnumerator AnimateScaleRoutine(Vector3 from, Vector3 to, float duration)
+    {
+        if (duration <= 0f)
+        {
+            transform.localScale = to;
+            yield break;
+        }
+
+        float elapsed = 0f;
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.SmoothStep(0f, 1f, elapsed / duration);
+            transform.localScale = Vector3.Lerp(from, to, t);
+            yield return null;
+        }
+        transform.localScale = to;
+    }
+
+    private IEnumerator DevilMineLeakerRoutine(GameObject minePrefabOverride)
+    {
+        if (isDevilMineLeaker) yield break;
+        isDevilMineLeaker = true;
+        float timer = 30f;
+        const float placeInterval = 1.5f;
+        float placeTimer = placeInterval;
+        while (timer > 0 && !IsDead)
+        {
+            timer -= Time.deltaTime;
+            placeTimer -= Time.deltaTime;
+            if (placeTimer <= 0)
+            {
+                placeTimer = placeInterval;
+                yield return PlaceMineForceWithStun(minePrefabOverride);
+            }
+            else
+            {
+                yield return null;
+            }
+        }
+        isDevilMineLeaker = false;
+    }
+
+    private IEnumerator PlaceMineForceWithStun(GameObject minePrefabOverride)
+    {
+        if (!PlaceMineForce(minePrefabOverride)) yield break;
+
+        float delay = tankData != null ? tankData.minePlacementDelay : 0.5f;
+        ApplyStun(delay);
+        yield return new WaitForSeconds(delay);
+    }
+
+    private bool PlaceMineForce(GameObject minePrefabOverride)
+    {
+        GameObject prefabToUse = minePrefabOverride != null ? minePrefabOverride : minePrefab;
+        if (prefabToUse == null || ActiveMineCount >= GetTotalMineLimit()) return false;
+
+        GameObject mineObj = Instantiate(prefabToUse, transform.position, Quaternion.identity);
+        if (mineObj.TryGetComponent(out MineController mine))
+        {
+            mine.Init(this, mineData);
+            OnMinePlaced();
+            return true;
+        }
+        if (mineObj.TryGetComponent(out RobotBombController robot))
+        {
+            robot.Init(this, mineData);
+            OnMinePlaced();
+            return true;
+        }
+        if (mineObj.TryGetComponent(out TankSpawnerBox spawner))
+        {
+            spawner.Init(this, team);
+            ActiveMineCount++;
+            return true;
+        }
+
+        Destroy(mineObj);
+        return false;
+    }
+
+    private IEnumerator Devil666Routine(GameObject shellPrefabOverride)
+    {
+        if (isDevil666) yield break;
+        isDevil666 = true;
+
+        GameObject originalShell = shellPrefab;
+        if (shellPrefabOverride != null) shellPrefab = shellPrefabOverride;
+
+        float timer = 10f;
+        const float fireInterval = 1.0f;
+        float fireTimer = fireInterval;
+        while (timer > 0 && !IsDead)
+        {
+            timer -= Time.deltaTime;
+            fireTimer -= Time.deltaTime;
+            if (fireTimer <= 0f)
+            {
+                fireTimer = fireInterval;
+                FireShellForce();
+            }
+            yield return null;
+        }
+
+        isDevil666 = false;
+        shellPrefab = originalShell;
+    }
+
+    private void FireShellForce()
+    {
+        if (shellPrefab == null) return;
+        if (!TryGetMuzzleTransform(out Transform muzzle)) return;
+
+        if (EffectManager.Instance != null)
+        {
+            EffectManager.Instance.ShotSound();
+            EffectManager.Instance.PlayMuzzleFlash(muzzle);
+        }
+
+        GameObject s = Instantiate(shellPrefab, muzzle.position, muzzle.rotation);
+        if (s.TryGetComponent(out ShellController sc))
+        {
+            sc.Launch(gameObject, 0);
+        }
+    }
+
+    private bool TryGetMuzzleTransform(out Transform muzzle)
+    {
+        muzzle = null;
+        if (TryGetComponent(out TankController tankController) && tankController.FirePoint != null)
+        {
+            muzzle = tankController.FirePoint;
+            return true;
+        }
+
+        if (TryGetComponent(out EnemyTankController enemyController) && enemyController.firePoint != null)
+        {
+            muzzle = enemyController.firePoint;
+            return true;
+        }
+
+        muzzle = transform.Find("FirePoint") ?? transform.Find("Turret/FirePoint");
+        return muzzle != null;
     }
 
     public void TakeDamage(int damage, TankStatus attacker = null)
     {
+        if (damageForwardTarget != null && !damageForwardTarget.IsDead)
+        {
+            damageForwardTarget.TakeDamage(damage, attacker);
+            return;
+        }
+
         if (IsDead) return;
         if (GameManager.Instance != null && GameManager.Instance.IsGameFinished()) return;
         if (GlobalGameManager.Instance != null && GlobalGameManager.Instance.SelectedStage != null)
@@ -489,6 +697,8 @@ public class TankStatus : MonoBehaviour
         baseSpeed += bonusMoveSpeed;
         if (_activeShield != null && _activeShield.Data != null) baseSpeed -= _activeShield.Data.speedPenalty;
 
+        if (isDevil666) baseSpeed -= 6.0f;
+
         // ★修正: 暴走中は基本速度を2倍にした上で、アンテナ戦車ごとに指定された「ボーナス速度」を丸ごと上乗せする
         if (isJammingBerserk)
         {
@@ -499,7 +709,14 @@ public class TankStatus : MonoBehaviour
             baseSpeed *= 2.0f;
         }
 
-        return Mathf.Max(1.0f, baseSpeed);
+        if (isDevilBerserk)
+        {
+            if (isBerserkerMode || isJammingBerserk) baseSpeed *= 2.0f; // 常にバーサーク状態の場合はさらに2倍(計4倍)
+            else baseSpeed *= 2.0f;
+        }
+
+        // デビル666の場合はマイナス速度を許容するか、最低速度を維持するか（-6をそのまま適用するため制限を緩める）
+        return isDevil666 ? baseSpeed : Mathf.Max(1.0f, baseSpeed);
     }
 
     public float GetCurrentRotationSpeed()
@@ -508,24 +725,45 @@ public class TankStatus : MonoBehaviour
         return ((tankData != null) ? tankData.rotationSpeed : 90f) + bonusRotationSpeed;
     }
 
-    public int GetTotalMaxAmmo() => ((tankData != null) ? tankData.maxAmmo : 5) + bonusMaxAmmo;
-    public int GetTotalRicochetCount()
+    public int GetTotalMaxAmmo()
     {
+        return ((tankData != null) ? tankData.maxAmmo : 5) + bonusMaxAmmo;
+    }
+    public int GetTotalRicochetCount() => GetRicochetCountForPrefab(null);
+
+    /// <summary>
+    /// 指定プレハブの ShellData とバフを合わせた跳弾回数（射線判定・可視化用）
+    /// </summary>
+    public int GetRicochetCountForPrefab(GameObject prefab)
+    {
+        if (isDevil666) return 6;
+
         int baseCount = 0;
-        if (shellPrefab != null)
+        GameObject source = prefab != null ? prefab : shellPrefab;
+        if (source != null)
         {
-            var shell = shellPrefab.GetComponent<ShellController>();
+            var shell = source.GetComponent<ShellController>();
             if (shell != null && shell.shellData != null) baseCount = shell.shellData.maxBounces;
         }
         return baseCount + bonusBounces;
     }
-    public int GetTotalMineLimit() => ((tankData != null) ? tankData.maxMines : 3) + bonusMineLimit;
+    public int GetTotalMineLimit()
+    {
+        if (isDevilMineLeaker) return 5;
+        return ((tankData != null) ? tankData.maxMines : 3) + bonusMineLimit;
+    }
 
     public int GetTotalShellDamage(int baseDamage) => baseDamage + (buffData != null ? buffData.shellDamageBonus[Mathf.Min(levelShellDamage, buffData.shellDamageBonus.Length - 1)] : levelShellDamage * 10);
     public int GetTotalMineDamage(int baseDamage) => baseDamage + (buffData != null ? buffData.mineDamageBonus[Mathf.Min(levelMineDamage, buffData.mineDamageBonus.Length - 1)] : levelMineDamage * 20);
 
     public void TakeWeakPointDamage(int baseDamage, TankStatus attacker = null)
     {
+        if (damageForwardTarget != null && !damageForwardTarget.IsDead)
+        {
+            damageForwardTarget.TakeWeakPointDamage(baseDamage, attacker);
+            return;
+        }
+
         int totalDamage = baseDamage + weakPointBonusDamage;
         TakeDamage(totalDamage, attacker);
     }
